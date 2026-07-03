@@ -1,8 +1,11 @@
 {
   "name": "@platforma-open/milaboratories.generation-probability.software",
   "version": "1.0.0",
-  "type": "module",
   "description": "Block Software",
+  "files": [
+    "./dist/**/*"
+  ],
+  "type": "module",
   "scripts": {
     "do-pack": "shx rm -f *.tgz && pl-pkg build && pnpm pack && shx mv platforma-open*.tgz package.tgz",
     "changeset": "changeset",
@@ -10,6 +13,10 @@
     "build": "pl-pkg build",
     "deps:export": "bash scripts/deps-export.sh",
     "prepublishOnly": "pl-pkg prepublish"
+  },
+  "devDependencies": {
+    "@platforma-open/milaboratories.runenv-python-3": "catalog:",
+    "@platforma-sdk/package-builder": "catalog:"
   },
   "block-software": {
     "artifacts": {
@@ -28,13 +35,12 @@
       "main": {
         "binary": {
           "artifact": "py-archive",
-          "cmd": [ "python", "{pkg}/main.py" ]
+          "cmd": [
+            "python",
+            "{pkg}/main.py"
+          ]
         }
       }
     }
-  },
-  "devDependencies": {
-    "@platforma-open/milaboratories.runenv-python-3": "catalog:",
-    "@platforma-sdk/package-builder": "catalog:"
   }
 }

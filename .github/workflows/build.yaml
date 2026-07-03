@@ -11,77 +11,57 @@ on:
   workflow_dispatch: {}
 jobs:
   init:
-    if: github.repository != 'milaboratory/platforma-block-boilerplate'
-    runs-on: hz-ubuntu-dind
+    runs-on: ubuntu-latest
     steps:
       - uses: milaboratory/github-ci/actions/context/init@v4
         with:
           version-canonize: false
           branch-versioning: main
   run:
-    if: github.repository != 'milaboratory/platforma-block-boilerplate'
     needs:
       - init
-
     uses: milaboratory/github-ci/.github/workflows/node-simple-pnpm.yaml@v4
     with:
-      app-name: 'Block: block-boilerplate'
-      app-name-slug: 'block-block-boilerplate'
-
+      app-name: 'Block: Generation Probability'
+      app-name-slug: 'block-generation-probability'
       node-version: '20.x'
-      gha-runner-label: hz-ubuntu-dind
       build-script-name: 'build'
       pnpm-recursive-build: false
 
-      test: false
+      test: true
       test-script-name: 'test'
       pnpm-recursive-tests: false
       team-id: 'ciplopen'
 
+      publish-to-public: 'true'
       package-path: 'block'
-      publish-to-public: true
-      create-tag: true
+      create-tag: 'true'
 
       npmrc-config: |
         {
           "registries": {
             "https://registry.npmjs.org/": {
-              "scopes": ["milaboratories", "platforma-open", "platforma-sdk"],
+              "scopes": ["milaboratories", "platforma-sdk", "platforma-open"],
               "tokenVar": "NPMJS_TOKEN"
-            },
-            "https://npm.pkg.github.com/": {
-              "scopes": ["milaboratory"],
-              "tokenVar": "NODE_AUTH_TOKEN"
             }
           }
         }
-
     secrets:
       env: |
         { "PL_LICENSE": ${{ toJSON(secrets.MI_LICENSE) }},
           "MI_LICENSE": ${{ toJSON(secrets.MI_LICENSE) }},
-
           "NPMJS_TOKEN": ${{ toJSON(secrets.NPMJS_TOKEN) }},
           "PL_CI_TEST_USER": ${{ toJSON(secrets.PL_CI_TEST_USER) }},
           "PL_CI_TEST_PASSWORD": ${{ toJSON(secrets.PL_CI_TEST_PASSWORD) }},
 
           "AWS_CI_IAM_MONOREPO_SIMPLE_ROLE": ${{ toJSON(secrets.AWS_CI_IAM_MONOREPO_SIMPLE_ROLE) }},
           "AWS_CI_TURBOREPO_S3_BUCKET": ${{ toJSON(secrets.AWS_CI_TURBOREPO_S3_BUCKET) }},
-
-          "HZ_CI_TURBO_S3_BUCKET": ${{ toJSON(vars.HZ_CI_TURBO_S3_BUCKET) }},
-          "HZ_CI_TURBO_S3_ENDPOINT": ${{ toJSON(vars.HZ_CI_TURBO_S3_ENDPOINT) }},
-          "HZ_CI_TURBO_S3_REGION": ${{ toJSON(vars.HZ_CI_TURBO_S3_REGION) }},
-          "HZ_CI_TURBO_S3_ACCESS_KEY": ${{ toJSON(secrets.HZ_CI_TURBO_S3_ACCESS_KEY) }},
-          "HZ_CI_TURBO_S3_SECRET_KEY": ${{ toJSON(secrets.HZ_CI_TURBO_S3_SECRET_KEY) }},
-          "HZ_CI_CACHE_S3_ACCESS_KEY": ${{ toJSON(secrets.HZ_CI_CACHE_S3_ACCESS_KEY) }},
-          "HZ_CI_CACHE_S3_SECRET_KEY": ${{ toJSON(secrets.HZ_CI_CACHE_S3_SECRET_KEY) }},
-
           "PL_REGISTRY_PLATFORMA_OPEN_UPLOAD_URL": ${{ toJSON(secrets.PL_REGISTRY_PLOPEN_UPLOAD_URL) }},
           "QUAY_USERNAME": ${{ toJSON(secrets.QUAY_USERNAME) }},
           "QUAY_ROBOT_TOKEN": ${{ toJSON(secrets.QUAY_ROBOT_TOKEN) }} }
 
-      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       SLACK_CHANNEL: ${{ secrets.SLACK_BLOCKS_CI_CHANNEL }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
       GH_ZEN_APP_ID: ${{ secrets.GH_ZEN_APP_ID }}
       GH_ZEN_APP_PRIVATE_KEY: ${{ secrets.GH_ZEN_APP_PRIVATE_KEY }}
