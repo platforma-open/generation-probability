@@ -1,0 +1,22 @@
+{
+  "name": "@platforma-open/milaboratories.generation-probability.test",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Block tests",
+  "keywords": [],
+  "files": [],
+  "type": "module",
+  "scripts": {
+    "test": "vitest --passWithNoTests"
+  },
+  "dependencies": {
+    "this-block": "workspace:@platforma-open/milaboratories.generation-probability@*"
+  },
+  "devDependencies": {
+    "@platforma-sdk/test": "catalog:"
+  },
+  "peerDependencies": {
+    "typescript": "*",
+    "vitest": "*"
+  }
+}

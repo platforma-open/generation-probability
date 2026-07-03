@@ -1,0 +1,243 @@
+// Generation Probability (Pgen) — main workflow.
+//
+// Reads MiXCR clonotype columns from the selected input dataset, and for every
+// scorable (chain, receptor) slot writes a Parquet of (clonotypeKey, CDR3, V, J,
+// productive), runs OLGA once with the (species, locus) model, and imports the
+// returned Pgen / -log10(Pgen) columns onto the input clonotype axis.
+//
+// Locus is derived from the data (chain domain / receptor); species is a block
+// parameter (it is not carried on MiXCR's clonotype columns — see the model).
+
+wf := import("@platforma-sdk/workflow-tengo:workflow")
+render := import("@platforma-sdk/workflow-tengo:render")
+smart := import("@platforma-sdk/workflow-tengo:smart")
+assets := import("@platforma-sdk/workflow-tengo:assets")
+ll := import("@platforma-sdk/workflow-tengo:ll")
+maps := import("@platforma-sdk/workflow-tengo:maps")
+pframes := import("@platforma-sdk/workflow-tengo:pframes")
+
+olgaTpl := assets.importTemplate(":olga")
+processTpl := assets.importTemplate(":process")
+
+CDR3_DOMAIN := { "pl7.app/vdj/feature": "CDR3", "pl7.app/alphabet": "aminoacid" }
+SC_CHAIN := "pl7.app/vdj/scClonotypeChain"
+SC_INDEX := "pl7.app/vdj/scClonotypeChain/index"
+
+// Bulk clonotypeKey axis chain domain → OLGA locus. Accepts both the chainInfos
+// long keys (IGHeavy/…) and the short forms, and leaves IGLight for per-row
+// kappa/lambda routing in the scorer.
+BULK_LOCUS := {
+	"IGHeavy": "IGH", "IGH": "IGH",
+	"IGKappa": "IGK", "IGK": "IGK",
+	"IGLambda": "IGL", "IGL": "IGL",
+	"IGLight": "IGLight",
+	"TCRBeta": "TRB", "TRB": "TRB",
+	"TCRAlpha": "TRA", "TRA": "TRA"
+}
+
+wf.prepare(func(args) {
+	bundleBuilder := wf.createPBundleBuilder()
+	bundleBuilder.ignoreMissingDomains()
+	bundleBuilder.addAnchor("main", args.inputAnchor)
+
+	bundleBuilder.addMulti({
+		axes: [{ anchor: "main", idx: 1 }],
+		name: "pl7.app/vdj/sequence",
+		domain: CDR3_DOMAIN
+	}, "cdr3")
+	bundleBuilder.addMulti({
+		axes: [{ anchor: "main", idx: 1 }],
+		name: "pl7.app/vdj/geneHit",
+		domain: { "pl7.app/vdj/reference": "VGene" }
+	}, "v")
+	bundleBuilder.addMulti({
+		axes: [{ anchor: "main", idx: 1 }],
+		name: "pl7.app/vdj/geneHit",
+		domain: { "pl7.app/vdj/reference": "JGene" }
+	}, "j")
+	bundleBuilder.addMulti({
+		axes: [{ anchor: "main", idx: 1 }],
+		name: "pl7.app/vdj/sequence/productive"
+	}, "productive")
+
+	return { columns: bundleBuilder.build() }
+})
+
+wf.body(func(args) {
+	columns := args.columns
+	datasetSpec := columns.getSpec(args.inputAnchor)
+	keyAxisSpec := datasetSpec.axesSpec[1]
+	clonotypeKeyName := keyAxisSpec.name
+	isSingleCell := clonotypeKeyName == "pl7.app/vdj/scClonotypeKey"
+
+	species := args.species
+
+	// Index a resolved column list by slot key. Single-cell columns carry the
+	// scClonotypeChain + index domains (one column per slot); bulk has a single
+	// chainless slot keyed "".
+	slotKey := func(column) {
+		domain := column.spec.domain
+		if is_undefined(domain) {
+			return ""
+		}
+		chain := domain[SC_CHAIN]
+		index := domain[SC_INDEX]
+		if is_undefined(chain) {
+			return ""
+		}
+		return chain + "/" + index
+	}
+	indexBySlot := func(columnList) {
+		bySlot := {}
+		for column in columnList {
+			bySlot[slotKey(column)] = column
+		}
+		return bySlot
+	}
+
+	cdr3BySlot := indexBySlot(columns.getColumns("cdr3"))
+	vBySlot := indexBySlot(columns.getColumns("v"))
+	jBySlot := indexBySlot(columns.getColumns("j"))
+	prodBySlot := indexBySlot(columns.getColumns("productive"))
+
+	// (receptor, chain-letter) → OLGA locus for single-cell. A is the more diverse
+	// chain (heavy / beta); B is the light / alpha chain. Light stays IGLight for
+	// per-row kappa/lambda routing in the scorer.
+	// Receptor is the producer's receptorInfos key: "IG" (BCR) or "TCRAB"
+	// (alpha/beta TCR). Gamma/delta ("TCRGD") has no OLGA model → unsupported.
+	scLocus := func(receptor, chain) {
+		if receptor == "IG" {
+			return chain == "A" ? "IGH" : "IGLight"
+		}
+		if receptor == "TCRAB" {
+			return chain == "A" ? "TRB" : "TRA"
+		}
+		return undefined
+	}
+
+	buildTable := func(cdr3Col, vCol, jCol, prodCol) {
+		builder := pframes.parquetFileBuilder()
+		builder.setAxisHeader(keyAxisSpec, "clonotypeKey")
+		builder.add(cdr3Col, { header: "cdr3" })
+		if !is_undefined(vCol) {
+			builder.add(vCol, { header: "v" })
+		}
+		if !is_undefined(jCol) {
+			builder.add(jCol, { header: "j" })
+		}
+		if !is_undefined(prodCol) {
+			builder.add(prodCol, { header: "productive" })
+		}
+		builder.cpu(1)
+		builder.mem("8GiB")
+		return builder.build()
+	}
+
+	// Build one scoring unit per slot that has a CDR3 column.
+	units := []
+	logHandles := {}
+	for slot in maps.getKeys(cdr3BySlot) {
+		cdr3Col := cdr3BySlot[slot]
+
+		locus := undefined
+		chain := undefined
+		index := undefined
+		if isSingleCell {
+			domain := cdr3Col.spec.domain
+			chain = domain[SC_CHAIN]
+			index = domain[SC_INDEX]
+			// v1 scores PRIMARY receptors only; skip secondary slots. MiXCR exports
+			// only the CDR3 for secondary receptors (no V gene), so a secondary light
+			// chain cannot be routed to the correct kappa-vs-lambda OLGA model — and
+			// emitting a guessed model would break the "meaningful-only" invariant.
+			// Rather than score heavy-secondary but silently drop every light-secondary,
+			// v1 drops the secondary receptor entirely (the "score all receptors"
+			// decision was explicitly left open to revisit). Bulk has no secondary.
+			if index != "primary" {
+				continue
+			}
+			receptor := keyAxisSpec.domain["pl7.app/vdj/receptor"]
+			locus = scLocus(receptor, chain)
+			if is_undefined(locus) {
+				ll.panic("Generation probability: unsupported receptor %v (only IG and TCR beta/alpha are supported)", receptor)
+			}
+		} else {
+			locus = BULK_LOCUS[keyAxisSpec.domain["pl7.app/vdj/chain"]]
+			if is_undefined(locus) {
+				ll.panic("Generation probability: cannot resolve locus from chain %v", keyAxisSpec.domain["pl7.app/vdj/chain"])
+			}
+		}
+
+		table := buildTable(cdr3Col, vBySlot[slot], jBySlot[slot], prodBySlot[slot])
+
+		olgaRun := render.create(olgaTpl, {
+			table: table,
+			params: smart.createJsonResource({ species: species, locus: locus })
+		}, {
+			metaInputs: { mem: args.mem }
+		})
+
+		unitValue := {
+			result: olgaRun.output("result", 24 * 60 * 60 * 1000),
+			stats: olgaRun.output("stats", 24 * 60 * 60 * 1000)
+		}
+		if isSingleCell {
+			unitValue.chain = chain
+			unitValue.index = index
+		}
+
+		unitId := slot == "" ? "bulk" : slot
+		units = append(units, { id: unitId, value: unitValue })
+		logHandles[isSingleCell ? chain : "bulk"] = olgaRun.output("log", 24 * 60 * 60 * 1000)
+	}
+
+	unitsBuilder := smart.mapBuilder()
+	for unit in units {
+		unitsBuilder.add(unit.id, unit.value)
+	}
+
+	datasetLabel := ""
+	traceAnnotations := {}
+	if !is_undefined(datasetSpec.annotations) {
+		if !is_undefined(datasetSpec.annotations["pl7.app/label"]) {
+			datasetLabel = datasetSpec.annotations["pl7.app/label"]
+		}
+		if !is_undefined(datasetSpec.annotations["pl7.app/trace"]) {
+			traceAnnotations = { "pl7.app/trace": datasetSpec.annotations["pl7.app/trace"] }
+		}
+	}
+
+	processResult := render.create(processTpl, {
+		units: unitsBuilder.build(),
+		params: smart.createJsonResource({
+			clonotypeKeySpec: keyAxisSpec,
+			isSingleCell: isSingleCell,
+			datasetLabel: datasetLabel,
+			traceAnnotations: traceAnnotations
+		})
+	}, {
+		metaInputs: { mem: args.mem }
+	})
+
+	// Per-chain OLGA stderr streams (bare 0..1 progress fractions): heavy = A (or the
+	// single bulk chain), light = B. The model reads the latest line via getProgressLog
+	// to drive the progress strip. Not shown as a log view (synthetic progress only).
+	outputs := {
+		pgenFrame: processResult.output("pgenFrame", 24 * 60 * 60 * 1000),
+		warnings: processResult.output("warnings", 24 * 60 * 60 * 1000)
+	}
+	heavyLog := isSingleCell ? logHandles["A"] : logHandles["bulk"]
+	if !is_undefined(heavyLog) {
+		outputs.progressHeavy = heavyLog
+	}
+	if !is_undefined(logHandles["B"]) {
+		outputs.progressLight = logHandles["B"]
+	}
+
+	return {
+		outputs: outputs,
+		exports: {
+			pgen: processResult.output("exportFrame", 24 * 60 * 60 * 1000)
+		}
+	}
+})

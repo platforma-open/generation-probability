@@ -1,0 +1,46 @@
+// Runs the OLGA Pgen scorer once for one (chain, receptor) slot. Kept as a
+// separate deferred template so identical inputs dedup across block instances,
+// and so `mem` can ride as a meta input (it changes resource allocation, not the
+// result). `species` / `locus` DO change the result, so they travel as a JSON
+// resource input, not a meta input.
+
+self := import("@platforma-sdk/workflow-tengo:tpl")
+exec := import("@platforma-sdk/workflow-tengo:exec")
+assets := import("@platforma-sdk/workflow-tengo:assets")
+math := import("math")
+
+olgaSw := assets.importSoftware("@platforma-open/milaboratories.generation-probability.software:main")
+
+self.defineOutputs("result", "stats", "log")
+
+self.body(func(args) {
+	params := args.params
+
+	memGiB := 8
+	if !is_undefined(args.mem) {
+		memGiB = args.mem
+	}
+
+	cmd := exec.builder().
+		software(olgaSw).
+		mem(string(int(math.max(8, memGiB))) + "GiB").
+		cpu(1).
+		addFile("input.parquet", args.table).
+		arg("input.parquet").
+		arg("result.parquet").
+		arg("stats.json").
+		arg("--species").arg(params.species).
+		arg("--locus").arg(params.locus).
+		saveFile("result.parquet").
+		saveFileContent("stats.json").
+		saveStderrStream().
+		run()
+
+	return {
+		result: cmd.getFile("result.parquet"),
+		stats: cmd.getFileContent("stats.json"),
+		// stderr carries the skip messages + [==PROGRESS==] lines; used by the model
+		// for both the log view (getLogHandle) and the progress strip (getProgressLog).
+		log: cmd.getStderrStream()
+	}
+})

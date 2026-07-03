@@ -1,0 +1,28 @@
+{
+  "name": "@platforma-open/milaboratories.generation-probability.ui",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "fmt": "ts-builder format",
+    "dev": "ts-builder serve --target browser",
+    "watch": "ts-builder build --target browser --watch",
+    "build": "ts-builder build --target browser",
+    "check": "ts-builder check --target browser"
+  },
+  "dependencies": {
+    "@platforma-open/milaboratories.generation-probability.model": "workspace:*",
+    "@platforma-sdk/model": "catalog:",
+    "@platforma-sdk/ui-vue": "catalog:",
+    "vue": "catalog:"
+  },
+  "devDependencies": {
+    "@milaboratories/ts-builder": "catalog:",
+    "@milaboratories/ts-configs": "catalog:"
+  },
+  "peerDependencies": {
+    "typescript": "*",
+    "vite": "*",
+    "vitest": "*",
+    "vue": "*"
+  }
+}

@@ -1,0 +1,161 @@
+// Imports each scored slot's result Parquet into a pair of PColumns (raw Pgen +
+// its -log10) on the input clonotype axis, and aggregates the per-slot exclusion
+// counts into a single user-facing warning. Runs after the OLGA execs complete
+// (it depends on their result + stats resources), so it can read the stats JSON.
+
+self := import("@platforma-sdk/workflow-tengo:tpl")
+xsv := import("@platforma-sdk/workflow-tengo:pframes.xsv")
+pframes := import("@platforma-sdk/workflow-tengo:pframes")
+pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
+ll := import("@platforma-sdk/workflow-tengo:ll")
+smart := import("@platforma-sdk/workflow-tengo:smart")
+math := import("math")
+
+self.defineOutputs("pgenFrame", "exportFrame", "warnings")
+
+PGEN_NAME := "pl7.app/vdj/pgen"
+NEG_LOG_PGEN_NAME := "pl7.app/vdj/negLog10Pgen"
+
+self.body(func(args) {
+	params := args.params
+	units := args.units
+	clonotypeKeySpec := params.clonotypeKeySpec
+	isSingleCell := params.isSingleCell
+
+	memGiB := 8
+	if !is_undefined(args.mem) {
+		memGiB = args.mem
+	}
+	convMemGiB := string(int(math.max(8, memGiB))) + "GiB"
+
+	// Content-address each column by the canonical id of its scored data (not the
+	// blockId), so identical results across blocks unify and different results stay
+	// distinct — the pattern used by clonotype-convergence / humanization-score.
+	contentHash := func(table) {
+		info := table.info()
+		if !is_undefined(info.CanonicalID) {
+			return ll.base32Encode(info.CanonicalID)
+		}
+		valueInfo := smart.resource(info.Value).info()
+		return ll.base32Encode(valueInfo.CanonicalID)
+	}
+
+	blockLabel := params.datasetLabel
+	if blockLabel == "" {
+		blockLabel = "Generation Probability"
+	}
+	pgenTrace := pSpec.makeTrace({ annotations: params.traceAnnotations }, {
+		type: "milaboratories.generation-probability",
+		importance: 30,
+		label: blockLabel
+	})
+
+	outputBuilder := pframes.pFrameBuilder()
+	exportBuilder := pframes.pFrameBuilder()
+
+	totalExcluded := 0
+
+	for unitId, unit in units {
+		stats := unit.stats.getDataAsJson()
+		if !is_undefined(stats.excluded) {
+			totalExcluded += stats.excluded
+		}
+
+		suffix := ""
+		labelSuffix := ""
+		domain := {}
+		// Heavy (A) sorts before Light (B); primary before secondary.
+		chainPriority := 0
+		receptorPriority := 0
+		if isSingleCell {
+			chain := unit.chain
+			index := unit.index
+			suffix = chain + index
+			domain = {
+				"pl7.app/vdj/scClonotypeChain": chain,
+				"pl7.app/vdj/scClonotypeChain/index": index
+			}
+			chainLabel := (chain == "A" ? "Heavy" : "Light")
+			labelSuffix = ", " + chainLabel
+			if index != "primary" {
+				labelSuffix = labelSuffix + " (secondary)"
+			}
+			if chain != "A" {
+				chainPriority = -2
+			}
+			if index != "primary" {
+				receptorPriority = -1
+			}
+		}
+		domain["pl7.app/contentHash"] = contentHash(unit.result)
+
+		basePriority := 30000 + chainPriority * 1000 + receptorPriority * 500
+
+		negLogSpec := {
+			name: NEG_LOG_PGEN_NAME,
+			valueType: "Double",
+			domain: domain,
+			annotations: {
+				"pl7.app/label": "-log10(Pgen)" + labelSuffix,
+				"pl7.app/description": "Negative log10 of the OLGA generation probability; higher = rarer / further from the germline starting point. +Inf when Pgen underflows to 0.",
+				"pl7.app/table/visibility": "default",
+				"pl7.app/table/orderPriority": string(basePriority),
+				"pl7.app/format": ".2~f",
+				"pl7.app/isScore": "true",
+				"pl7.app/score/rankingOrder": "decreasing"
+			}
+		}
+		pgenSpec := {
+			name: PGEN_NAME,
+			valueType: "Double",
+			domain: domain,
+			annotations: {
+				"pl7.app/label": "Pgen" + labelSuffix,
+				"pl7.app/description": "OLGA generation probability of the CDR3 under the (species, locus) recombination model.",
+				"pl7.app/table/visibility": "optional",
+				"pl7.app/table/orderPriority": string(basePriority - 100),
+				"pl7.app/format": ".2~e"
+			}
+		}
+
+		importSpecs := {
+			axes: [ { column: "clonotypeKey", spec: clonotypeKeySpec } ],
+			columns: [
+				{
+					column: "neg_log_pgen",
+					id: "negLogPgen" + suffix,
+					allowNA: false,
+					spec: negLogSpec
+				},
+				{
+					column: "pgen",
+					id: "pgen" + suffix,
+					allowNA: false,
+					spec: pgenSpec
+				}
+			],
+			storageFormat: "Parquet",
+			partitionKeyLength: 0
+		}
+
+		imported := xsv.importFile(unit.result, "parquet", importSpecs, {
+			splitDataAndSpec: true, cpu: 1, mem: convMemGiB
+		})
+
+		for key, column in imported {
+			outputBuilder.add(key, column.spec, column.data)
+			exportBuilder.add(key, pgenTrace.inject(column.spec), column.data)
+		}
+	}
+
+	warnings := []
+	if totalExcluded > 0 {
+		warnings += [string(totalExcluded) + " clonotypes had no computable generation probability (non-productive or non-standard CDR3) and were omitted."]
+	}
+
+	return {
+		pgenFrame: pframes.exportFrame(outputBuilder.build()),
+		exportFrame: exportBuilder.build(),
+		warnings: smart.createJsonResource(warnings)
+	}
+})

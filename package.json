@@ -1,0 +1,37 @@
+{
+  "files": [
+    "index.d.ts",
+    "index.js"
+  ],
+  "scripts": {
+    "fmt": "turbo run fmt",
+    "check": "turbo run check",
+    "build": "turbo run build",
+    "build:dev": "env PL_PKG_DEV=local turbo run build",
+    "build:dev-remote": "env PL_PKG_DEV=local PL_DOCKER_BUILD=1 PL_DOCKER_AUTOPUSH=1 turbo run build",
+    "test": "env PL_PKG_DEV=local turbo run test --concurrency 1 --env-mode=loose",
+    "test:dry-run": "env PL_PKG_DEV=local turbo run test --dry-run=json",
+    "mark-stable": "turbo run mark-stable",
+    "watch": "turbo watch build",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "update-sdk": "block-tools update-deps"
+  },
+  "devDependencies": {
+    "@changesets/cli": "catalog:",
+    "@milaboratories/ts-builder": "catalog:",
+    "@platforma-sdk/block-tools": "catalog:",
+    "shx": "catalog:",
+    "turbo": "catalog:"
+  },
+  "peerDependencies": {
+    "oxfmt": "*",
+    "oxlint": "*"
+  },
+  "pnpm": {
+    "overrides": {
+      "@platforma-open/milaboratories.runenv-python-3": "link:../runenv-python-3/catalogue"
+    }
+  },
+  "packageManager": "pnpm@9.12.0"
+}
