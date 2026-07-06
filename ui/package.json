@@ -1,6 +1,5 @@
 {
   "name": "@platforma-open/milaboratories.generation-probability.ui",
-  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +11,6 @@
   },
   "dependencies": {
     "@platforma-open/milaboratories.generation-probability.model": "workspace:*",
-    "@platforma-sdk/model": "catalog:",
     "@platforma-sdk/ui-vue": "catalog:",
     "vue": "catalog:"
   },

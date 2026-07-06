@@ -1,243 +1,312 @@
-// Generation Probability (Pgen) — main workflow.
+// Generation Probability (Pgen) workflow.
 //
-// Reads MiXCR clonotype columns from the selected input dataset, and for every
-// scorable (chain, receptor) slot writes a Parquet of (clonotypeKey, CDR3, V, J,
-// productive), runs OLGA once with the (species, locus) model, and imports the
-// returned Pgen / -log10(Pgen) columns onto the input clonotype axis.
-//
-// Locus is derived from the data (chain domain / receptor); species is a block
-// parameter (it is not carried on MiXCR's clonotype columns — see the model).
+// Consumes one MiXCR clonotype dataset (anchor). For each chain slot it feeds the
+// CDR3 sequence + per-row locus (pl7.app/vdj/chain: TRA/TRB/IGH/IGK/IGL) to OLGA,
+// which computes the V(D)J generation probability. A single OLGA invocation covers
+// every chain; the tool loads per-locus models on demand and routes rows by locus.
+// Results are joined back onto the clonotype-key axis as per-chain PColumns.
 
 wf := import("@platforma-sdk/workflow-tengo:workflow")
-render := import("@platforma-sdk/workflow-tengo:render")
-smart := import("@platforma-sdk/workflow-tengo:smart")
+exec := import("@platforma-sdk/workflow-tengo:exec")
 assets := import("@platforma-sdk/workflow-tengo:assets")
+pframes := import("@platforma-sdk/workflow-tengo:pframes")
+xsv := import("@platforma-sdk/workflow-tengo:pframes.xsv")
+pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
 ll := import("@platforma-sdk/workflow-tengo:ll")
 maps := import("@platforma-sdk/workflow-tengo:maps")
-pframes := import("@platforma-sdk/workflow-tengo:pframes")
+json := import("json")
 
-olgaTpl := assets.importTemplate(":olga")
-processTpl := assets.importTemplate(":process")
+olgaSw := assets.importSoftware("@platforma-open/milaboratories.generation-probability.software:main")
 
-CDR3_DOMAIN := { "pl7.app/vdj/feature": "CDR3", "pl7.app/alphabet": "aminoacid" }
-SC_CHAIN := "pl7.app/vdj/scClonotypeChain"
-SC_INDEX := "pl7.app/vdj/scClonotypeChain/index"
+SEQUENCE_NAME := "pl7.app/vdj/sequence"
+CHAIN_NAME := "pl7.app/vdj/chain"
+CDR3_FEATURE := "CDR3"
+ALPHABET_DOMAIN := "pl7.app/alphabet"
+FEATURE_DOMAIN := "pl7.app/vdj/feature"
+SC_CHAIN_DOMAIN := "pl7.app/vdj/scClonotypeChain"
+SC_INDEX_DOMAIN := "pl7.app/vdj/scClonotypeChain/index"
 
-// Bulk clonotypeKey axis chain domain → OLGA locus. Accepts both the chainInfos
-// long keys (IGHeavy/…) and the short forms, and leaves IGLight for per-row
-// kappa/lambda routing in the scorer.
-BULK_LOCUS := {
-	"IGHeavy": "IGH", "IGH": "IGH",
-	"IGKappa": "IGK", "IGK": "IGK",
-	"IGLambda": "IGL", "IGL": "IGL",
-	"IGLight": "IGLight",
-	"TCRBeta": "TRB", "TRB": "TRB",
-	"TCRAlpha": "TRA", "TRA": "TRA"
+PGEN_NAME := "pl7.app/vdj/generationProbability"
+NEG_LOG_PGEN_NAME := "pl7.app/vdj/negLog10GenerationProbability"
+
+// Progress line prefix printed by software/src/main.py (to stderr).
+PROGRESS_PREFIX := "progress: "
+
+// OLGA short alphabet codes expected by the tool's --alphabet flag.
+alphabetCode := { "aminoacid": "aa", "nucleotide": "nt" }
+
+// receptor -> chain slot (A = more diverse) -> {suffix, label}. A/B come from
+// mixcr-clonotyping's receptorInfos (IG: heavy, light; TCRAB: beta, alpha).
+scSlotInfo := {
+	"IG": { "A": { suffix: "H", label: "Heavy" }, "B": { suffix: "L", label: "Light" } },
+	"TCRAB": { "A": { suffix: "Beta", label: "Beta" }, "B": { suffix: "Alpha", label: "Alpha" } },
+	"TCRGD": { "A": { suffix: "Delta", label: "Delta" }, "B": { suffix: "Gamma", label: "Gamma" } }
+}
+
+// Bulk clonotype-key axis carries pl7.app/vdj/chain set to the producer's chain
+// KEYS (IGHeavy, ...), not the mixcr filter values. Map each to its slot info.
+bulkSlotInfo := {
+	"IGHeavy": { suffix: "H", label: "Heavy" },
+	"IGLight": { suffix: "L", label: "Light" },
+	"IGKappa": { suffix: "L", label: "Light" },
+	"IGLambda": { suffix: "L", label: "Light" },
+	"TCRBeta": { suffix: "Beta", label: "Beta" },
+	"TCRAlpha": { suffix: "Alpha", label: "Alpha" }
+}
+
+// chain KEY -> receptor, to derive the receptor for bulk datasets and to reject
+// gamma/delta (no OLGA model in the packaged distribution).
+bulkChainReceptor := {
+	"IGHeavy": "IG", "IGLight": "IG", "IGKappa": "IG", "IGLambda": "IG",
+	"TCRAlpha": "TCRAB", "TCRBeta": "TCRAB",
+	"TCRGamma": "TCRGD", "TCRDelta": "TCRGD"
+}
+
+UNSUPPORTED_GD := "Generation probability is not available for TCR gamma/delta chains: the packaged OLGA distribution ships no gamma/delta recombination model. Supported: human/mouse IGH, IGK, IGL, TRA, TRB."
+
+// Resolve the alphabet OLGA should use from the clonotype-key structure. The key
+// is built from the assembling-feature sequence + V/J; when that feature is CDR3
+// the structure carries its alphabet (nucleotide keys use nSeqCDR3, aa keys use
+// aaSeqCDR3). We compute Pgen on the CDR3 in that same alphabet so it matches the
+// sequence that defines the clonotype. Falls back to amino acid.
+resolveAlphabet := func(keyAxisSpec, isSingleCell) {
+	structureKey := isSingleCell ? "pl7.app/vdj/scClonotypeKey/structure" : "pl7.app/vdj/clonotypeKey/structure"
+	if is_undefined(keyAxisSpec.domain) || is_undefined(keyAxisSpec.domain[structureKey]) {
+		return "aminoacid"
+	}
+	entries := json.decode(keyAxisSpec.domain[structureKey])
+	for entry in entries {
+		if entry[0] != SEQUENCE_NAME {
+			continue
+		}
+		feature := ""
+		alphabet := ""
+		for idx, pair in entry {
+			if idx == 0 {
+				continue
+			}
+			if pair[0] == FEATURE_DOMAIN {
+				feature = pair[1]
+			}
+			if pair[0] == ALPHABET_DOMAIN {
+				alphabet = pair[1]
+			}
+		}
+		if feature == CDR3_FEATURE && alphabet != "" {
+			return alphabet
+		}
+	}
+	return "aminoacid"
 }
 
 wf.prepare(func(args) {
-	bundleBuilder := wf.createPBundleBuilder()
-	bundleBuilder.ignoreMissingDomains()
-	bundleBuilder.addAnchor("main", args.inputAnchor)
+	bb := wf.createPBundleBuilder()
+	bb.ignoreMissingDomains()
+	bb.addAnchor("main", json.decode(args.inputAnchor))
 
-	bundleBuilder.addMulti({
+	// CDR3 sequence columns for BOTH alphabets (the body picks one). Single-cell
+	// emits one per (slot x primary/secondary allele); bulk emits one.
+	bb.addMulti({
 		axes: [{ anchor: "main", idx: 1 }],
-		name: "pl7.app/vdj/sequence",
-		domain: CDR3_DOMAIN
+		name: SEQUENCE_NAME,
+		domain: { "pl7.app/vdj/feature": CDR3_FEATURE }
 	}, "cdr3")
-	bundleBuilder.addMulti({
-		axes: [{ anchor: "main", idx: 1 }],
-		name: "pl7.app/vdj/geneHit",
-		domain: { "pl7.app/vdj/reference": "VGene" }
-	}, "v")
-	bundleBuilder.addMulti({
-		axes: [{ anchor: "main", idx: 1 }],
-		name: "pl7.app/vdj/geneHit",
-		domain: { "pl7.app/vdj/reference": "JGene" }
-	}, "j")
-	bundleBuilder.addMulti({
-		axes: [{ anchor: "main", idx: 1 }],
-		name: "pl7.app/vdj/sequence/productive"
-	}, "productive")
 
-	return { columns: bundleBuilder.build() }
+	// Per-row locus column (mixcr "topChains"). Value is the OLGA locus directly.
+	bb.addMulti({
+		axes: [{ anchor: "main", idx: 1 }],
+		name: CHAIN_NAME
+	}, "chains")
+
+	return { columns: bb.build() }
 })
 
 wf.body(func(args) {
 	columns := args.columns
-	datasetSpec := columns.getSpec(args.inputAnchor)
+	datasetSpec := columns.getSpec(json.decode(args.inputAnchor))
 	keyAxisSpec := datasetSpec.axesSpec[1]
-	clonotypeKeyName := keyAxisSpec.name
-	isSingleCell := clonotypeKeyName == "pl7.app/vdj/scClonotypeKey"
+	isSingleCell := keyAxisSpec.name == "pl7.app/vdj/scClonotypeKey"
 
-	species := args.species
-
-	// Index a resolved column list by slot key. Single-cell columns carry the
-	// scClonotypeChain + index domains (one column per slot); bulk has a single
-	// chainless slot keyed "".
-	slotKey := func(column) {
-		domain := column.spec.domain
-		if is_undefined(domain) {
-			return ""
-		}
-		chain := domain[SC_CHAIN]
-		index := domain[SC_INDEX]
-		if is_undefined(chain) {
-			return ""
-		}
-		return chain + "/" + index
+	// Receptor + gamma/delta reject.
+	receptor := ""
+	if isSingleCell {
+		receptor = keyAxisSpec.domain["pl7.app/vdj/receptor"]
+	} else {
+		receptor = bulkChainReceptor[keyAxisSpec.domain[CHAIN_NAME]]
 	}
-	indexBySlot := func(columnList) {
-		bySlot := {}
-		for column in columnList {
-			bySlot[slotKey(column)] = column
-		}
-		return bySlot
+	if receptor == "TCRGD" {
+		ll.panic(UNSUPPORTED_GD)
 	}
 
-	cdr3BySlot := indexBySlot(columns.getColumns("cdr3"))
-	vBySlot := indexBySlot(columns.getColumns("v"))
-	jBySlot := indexBySlot(columns.getColumns("j"))
-	prodBySlot := indexBySlot(columns.getColumns("productive"))
+	alphabet := resolveAlphabet(keyAxisSpec, isSingleCell)
+	ll.assert(!is_undefined(alphabet), "unsupported alphabet: %s", alphabet)
 
-	// (receptor, chain-letter) → OLGA locus for single-cell. A is the more diverse
-	// chain (heavy / beta); B is the light / alpha chain. Light stays IGLight for
-	// per-row kappa/lambda routing in the scorer.
-	// Receptor is the producer's receptorInfos key: "IG" (BCR) or "TCRAB"
-	// (alpha/beta TCR). Gamma/delta ("TCRGD") has no OLGA model → unsupported.
-	scLocus := func(receptor, chain) {
-		if receptor == "IG" {
-			return chain == "A" ? "IGH" : "IGLight"
+	// Group the CDR3 sequence column and the locus column per chain slot, keeping
+	// only the primary allele for single-cell (secondary lacks nt CDR3 / locus).
+	slots := {}
+	assignSlot := func(col, kind) {
+		domain := col.spec.domain
+		if isSingleCell && domain[SC_INDEX_DOMAIN] != "primary" {
+			return
 		}
-		if receptor == "TCRAB" {
-			return chain == "A" ? "TRB" : "TRA"
+		slot := isSingleCell ? domain[SC_CHAIN_DOMAIN] : ""
+		if is_undefined(slots[slot]) {
+			slots[slot] = {}
 		}
-		return undefined
+		slots[slot][kind] = col
+	}
+	for col in columns.getColumns("cdr3") {
+		if col.spec.domain[ALPHABET_DOMAIN] == alphabet {
+			assignSlot(col, "seq")
+		}
+	}
+	for col in columns.getColumns("chains") {
+		assignSlot(col, "chain")
 	}
 
-	buildTable := func(cdr3Col, vCol, jCol, prodCol) {
-		builder := pframes.parquetFileBuilder()
-		builder.setAxisHeader(keyAxisSpec, "clonotypeKey")
-		builder.add(cdr3Col, { header: "cdr3" })
-		if !is_undefined(vCol) {
-			builder.add(vCol, { header: "v" })
-		}
-		if !is_undefined(jCol) {
-			builder.add(jCol, { header: "j" })
-		}
-		if !is_undefined(prodCol) {
-			builder.add(prodCol, { header: "productive" })
-		}
-		builder.cpu(1)
-		builder.mem("8GiB")
-		return builder.build()
-	}
-
-	// Build one scoring unit per slot that has a CDR3 column.
-	units := []
-	logHandles := {}
-	for slot in maps.getKeys(cdr3BySlot) {
-		cdr3Col := cdr3BySlot[slot]
-
-		locus := undefined
-		chain := undefined
-		index := undefined
+	slotInfoFor := func(slot) {
 		if isSingleCell {
-			domain := cdr3Col.spec.domain
-			chain = domain[SC_CHAIN]
-			index = domain[SC_INDEX]
-			// v1 scores PRIMARY receptors only; skip secondary slots. MiXCR exports
-			// only the CDR3 for secondary receptors (no V gene), so a secondary light
-			// chain cannot be routed to the correct kappa-vs-lambda OLGA model — and
-			// emitting a guessed model would break the "meaningful-only" invariant.
-			// Rather than score heavy-secondary but silently drop every light-secondary,
-			// v1 drops the secondary receptor entirely (the "score all receptors"
-			// decision was explicitly left open to revisit). Bulk has no secondary.
-			if index != "primary" {
-				continue
-			}
-			receptor := keyAxisSpec.domain["pl7.app/vdj/receptor"]
-			locus = scLocus(receptor, chain)
-			if is_undefined(locus) {
-				ll.panic("Generation probability: unsupported receptor %v (only IG and TCR beta/alpha are supported)", receptor)
-			}
-		} else {
-			locus = BULK_LOCUS[keyAxisSpec.domain["pl7.app/vdj/chain"]]
-			if is_undefined(locus) {
-				ll.panic("Generation probability: cannot resolve locus from chain %v", keyAxisSpec.domain["pl7.app/vdj/chain"])
-			}
+			return scSlotInfo[receptor][slot]
 		}
+		return bulkSlotInfo[keyAxisSpec.domain[CHAIN_NAME]]
+	}
 
-		table := buildTable(cdr3Col, vBySlot[slot], jBySlot[slot], prodBySlot[slot])
+	// Build, in one pass: the input parquet (key + per-slot seq/locus columns),
+	// the parallel per-slot CLI argument lists, and the import column specs.
+	parquetBuilder := pframes.parquetFileBuilder()
+	parquetBuilder.setAxisHeader(keyAxisSpec, "clonotypeKey")
+	parquetBuilder.cpu(1)
+	parquetBuilder.mem("8GiB")
 
-		olgaRun := render.create(olgaTpl, {
-			table: table,
-			params: smart.createJsonResource({ species: species, locus: locus })
-		}, {
-			metaInputs: { mem: args.mem }
-		})
+	seqArgs := []
+	chainArgs := []
+	pgenArgs := []
+	negLogArgs := []
+	importColumns := []
 
-		unitValue := {
-			result: olgaRun.output("result", 24 * 60 * 60 * 1000),
-			stats: olgaRun.output("stats", 24 * 60 * 60 * 1000)
+	orderedSlots := isSingleCell ? ["A", "B"] : [""]
+	for slot in orderedSlots {
+		unit := slots[slot]
+		if is_undefined(unit) || is_undefined(unit.seq) || is_undefined(unit.chain) {
+			continue
 		}
+		info := slotInfoFor(slot)
+		if is_undefined(info) {
+			continue
+		}
+		suffix := info.suffix
+		slotTag := slot == "" ? "x" : slot
+
+		seqHeader := "seq_" + slotTag
+		chainHeader := "chain_" + slotTag
+		pgenHeader := "Pgen_" + suffix
+		negLogHeader := "neg_log_Pgen_" + suffix
+
+		parquetBuilder.add(unit.seq, { header: seqHeader })
+		parquetBuilder.add(unit.chain, { header: chainHeader })
+
+		seqArgs = append(seqArgs, seqHeader)
+		chainArgs = append(chainArgs, chainHeader)
+		pgenArgs = append(pgenArgs, pgenHeader)
+		negLogArgs = append(negLogArgs, negLogHeader)
+
+		valueDomain := {}
 		if isSingleCell {
-			unitValue.chain = chain
-			unitValue.index = index
+			valueDomain = { "pl7.app/vdj/scClonotypeChain": slot }
 		}
-
-		unitId := slot == "" ? "bulk" : slot
-		units = append(units, { id: unitId, value: unitValue })
-		logHandles[isSingleCell ? chain : "bulk"] = olgaRun.output("log", 24 * 60 * 60 * 1000)
-	}
-
-	unitsBuilder := smart.mapBuilder()
-	for unit in units {
-		unitsBuilder.add(unit.id, unit.value)
-	}
-
-	datasetLabel := ""
-	traceAnnotations := {}
-	if !is_undefined(datasetSpec.annotations) {
-		if !is_undefined(datasetSpec.annotations["pl7.app/label"]) {
-			datasetLabel = datasetSpec.annotations["pl7.app/label"]
-		}
-		if !is_undefined(datasetSpec.annotations["pl7.app/trace"]) {
-			traceAnnotations = { "pl7.app/trace": datasetSpec.annotations["pl7.app/trace"] }
-		}
-	}
-
-	processResult := render.create(processTpl, {
-		units: unitsBuilder.build(),
-		params: smart.createJsonResource({
-			clonotypeKeySpec: keyAxisSpec,
-			isSingleCell: isSingleCell,
-			datasetLabel: datasetLabel,
-			traceAnnotations: traceAnnotations
+		importColumns = append(importColumns, {
+			column: pgenHeader,
+			id: "pgen-" + suffix,
+			allowNA: true,
+			spec: {
+				name: PGEN_NAME,
+				valueType: "Double",
+				domain: valueDomain,
+				annotations: {
+					"pl7.app/label": "Pgen (" + info.label + ")",
+					"pl7.app/table/orderPriority": "80000"
+				}
+			}
 		})
-	}, {
-		metaInputs: { mem: args.mem }
+		importColumns = append(importColumns, {
+			column: negLogHeader,
+			id: "neglog-" + suffix,
+			allowNA: true,
+			spec: {
+				name: NEG_LOG_PGEN_NAME,
+				valueType: "Double",
+				domain: valueDomain,
+				annotations: {
+					"pl7.app/label": "-log10(Pgen) (" + info.label + ")",
+					"pl7.app/isScore": "true",
+					"pl7.app/table/orderPriority": "90000"
+				}
+			}
+		})
+	}
+
+	ll.assert(len(seqArgs) > 0, "no supported chain found in the input dataset")
+
+	inputParquet := parquetBuilder.build()
+
+	cmd := exec.builder().
+		software(olgaSw).
+		cpu(8).
+		mem("16GiB").
+		addFile("input.parquet", inputParquet).
+		arg("--input").arg("input.parquet").
+		arg("--output").arg("result.parquet").
+		arg("--species").arg(args.species).
+		arg("--alphabet").arg(alphabet).
+		arg("--key-column").arg("clonotypeKey").
+		arg("--workers").arg("8")
+
+	for idx, seqHeader in seqArgs {
+		cmd = cmd.
+			arg("--sequence-column").arg(seqHeader).
+			arg("--chain-column").arg(chainArgs[idx]).
+			arg("--pgen-column").arg(pgenArgs[idx]).
+			arg("--neg-log-pgen-column").arg(negLogArgs[idx])
+	}
+
+	result := cmd.
+		saveFile("result.parquet").
+		printErrStreamToStdout().
+		saveStdoutStream().
+		cache(24 * 60 * 60 * 1000).
+		run()
+
+	imported := xsv.importFile(result.getFile("result.parquet"), "parquet", {
+		axes: [{ column: "clonotypeKey", spec: keyAxisSpec }],
+		columns: importColumns,
+		storageFormat: "Parquet",
+		partitionKeyLength: 0
+	}, { splitDataAndSpec: true, cpu: 1, mem: "8GiB" })
+
+	traceLabel := "Generation Probability"
+	if !is_undefined(datasetSpec.annotations) && !is_undefined(datasetSpec.annotations["pl7.app/label"]) {
+		traceLabel = datasetSpec.annotations["pl7.app/label"]
+	}
+	trace := pSpec.makeTrace(datasetSpec, {
+		type: "milaboratories.generation-probability",
+		importance: 30,
+		label: traceLabel
 	})
 
-	// Per-chain OLGA stderr streams (bare 0..1 progress fractions): heavy = A (or the
-	// single bulk chain), light = B. The model reads the latest line via getProgressLog
-	// to drive the progress strip. Not shown as a log view (synthetic progress only).
-	outputs := {
-		pgenFrame: processResult.output("pgenFrame", 24 * 60 * 60 * 1000),
-		warnings: processResult.output("warnings", 24 * 60 * 60 * 1000)
+	frameBuilder := pframes.pFrameBuilder()
+	for k in maps.getKeys(imported) {
+		entry := imported[k]
+		frameBuilder.add(k, trace.inject(entry.spec), entry.data)
 	}
-	heavyLog := isSingleCell ? logHandles["A"] : logHandles["bulk"]
-	if !is_undefined(heavyLog) {
-		outputs.progressHeavy = heavyLog
-	}
-	if !is_undefined(logHandles["B"]) {
-		outputs.progressLight = logHandles["B"]
-	}
+	pgenFrame := frameBuilder.build()
 
 	return {
-		outputs: outputs,
+		outputs: {
+			pgenPf: pframes.exportFrame(pgenFrame),
+			progress: result.getStdoutStream()
+		},
 		exports: {
-			pgen: processResult.output("exportFrame", 24 * 60 * 60 * 1000)
+			pgen: pgenFrame
 		}
 	}
 })

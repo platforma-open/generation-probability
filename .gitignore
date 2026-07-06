@@ -8,8 +8,6 @@ log/
 .turbo
 vite.config.*.timestamp-*
 software/**/*.tgz
-software/.venv/
-**/__pycache__/
 .DS_Store
 .vscode/sftp.json
 test-dry-run.json

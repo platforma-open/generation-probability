@@ -1,5 +1,5 @@
 {
-  "name": "@platforma-open/milaboratories.generation-probability",
+  "name": "@platforma-open/milaboratories.generation-probability.block",
   "version": "1.0.0",
   "files": [
     "dist",
@@ -18,9 +18,9 @@
   },
   "scripts": {
     "build": "ts-builder build --target block-facade && block-tools pack",
+    "check": "ts-builder type-check --target block-facade",
     "prepublishOnly": "block-tools publish -r s3://milab-euce1-prod-pkgs-s3-block-registry/pub/releases/?region=eu-central-1 --registry-serve-url https://blocks.pl-open.science",
-    "do-pack": "shx rm -f package.tgz && pnpm pack && shx mv *.tgz package.tgz",
-    "check": "ts-builder type-check --target block-facade"
+    "do-pack": "shx rm -f package.tgz && pnpm pack && shx mv *.tgz package.tgz"
   },
   "dependencies": {},
   "devDependencies": {
@@ -34,7 +34,6 @@
     "shx": "catalog:",
     "typescript": "catalog:"
   },
-  "packageManager": "pnpm@9.12.0",
   "block": {
     "components": {
       "workflow": "@platforma-open/milaboratories.generation-probability.workflow/dist/tengo/tpl/main.plj.gz",
@@ -43,21 +42,24 @@
     },
     "meta": {
       "title": "Generation Probability",
-      "logo": "file:../logos/block-logo.png",
+      "logo": "file:logos/block-logo.png",
       "url": "https://github.com/platforma-open/generation-probability",
       "support": "mailto:support@milaboratories.com",
-      "description": "Compute the generation probability (Pgen) of BCR/TCR CDR3s with OLGA, ranking clonotypes by how far they sit from the germline starting point.",
-      "longDescription": "file:../docs/description.md",
-      "changelog": "file:../CHANGELOG.md",
+      "description": "Compute per-clonotype generation probability (Pgen) of BCR and TCR CDR3 sequences from a learned V(D)J recombination model (OLGA).",
+      "longDescription": "file:docs/description.md",
+      "changelog": "file:CHANGELOG.md",
       "tags": [
         "airr",
+        "vdj",
         "antibody",
+        "tcr",
+        "repertoire",
         "downstream"
       ],
       "organization": {
         "name": "MiLaboratories Inc",
         "url": "https://milaboratories.com/",
-        "logo": "file:../logos/organization-logo.png"
+        "logo": "file:logos/organization-logo.png"
       }
     }
   }

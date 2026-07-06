@@ -1,18 +1,11 @@
 {
   "name": "@platforma-open/milaboratories.generation-probability.test",
-  "version": "1.0.0",
   "private": true,
-  "description": "Block tests",
-  "keywords": [],
-  "files": [],
   "type": "module",
   "scripts": {
-    "test": "vitest run --passWithNoTests",
     "fmt": "ts-builder format",
-    "check": "ts-builder check --target block-test"
-  },
-  "dependencies": {
-    "this-block": "workspace:@platforma-open/milaboratories.generation-probability@*"
+    "check": "ts-builder check --target block-test",
+    "test": "vitest run --passWithNoTests"
   },
   "devDependencies": {
     "@milaboratories/ts-builder": "catalog:",

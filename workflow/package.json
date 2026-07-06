@@ -1,14 +1,11 @@
 {
   "name": "@platforma-open/milaboratories.generation-probability.workflow",
-  "version": "1.0.0",
   "private": true,
-  "description": "Block Workflow",
   "type": "module",
   "scripts": {
     "build": "shx rm -rf dist && pl-tengo build",
-    "test": "vitest",
-    "format": "/usr/bin/env emacs --script ./format.el || echo 'No emacs.'",
-    "check": "pl-tengo check"
+    "check": "pl-tengo check",
+    "format": "/usr/bin/env emacs --script ./format.el || echo 'No emacs.'"
   },
   "dependencies": {
     "@platforma-open/milaboratories.generation-probability.software": "workspace:*",
@@ -18,6 +15,5 @@
     "@platforma-sdk/tengo-builder": "catalog:",
     "@platforma-sdk/test": "catalog:",
     "shx": "catalog:"
-  },
-  "peerDependencies": {}
+  }
 }
