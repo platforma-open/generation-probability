@@ -1,10 +1,105 @@
-// Workflow entry point for generation-probability.
-
 wf := import("@platforma-sdk/workflow-tengo:workflow")
+render := import("@platforma-sdk/workflow-tengo:render")
+assets := import("@platforma-sdk/workflow-tengo:assets")
+ll := import("@platforma-sdk/workflow-tengo:ll")
+json := import("json")
+
+scoreTpl := assets.importTemplate(":score")
+
+ENTITY_KEY_NAMES := {
+	"pl7.app/vdj/clonotypeKey": true,
+	"pl7.app/vdj/scClonotypeKey": true,
+	"pl7.app/variantKey": true
+}
+
+// The alphabet may live directly on the key axis domain, or nested in the structured
+// key's `<key>/structure` domain under the CDR3 sequence entry.
+alphabetFromStructure := func(structureStr) {
+	if is_undefined(structureStr) {
+		return undefined
+	}
+	for entry in json.decode(structureStr) {
+		if len(entry) == 0 || entry[0] != "pl7.app/vdj/sequence" {
+			continue
+		}
+		for idx, item in entry {
+			if idx > 0 && item[0] == "pl7.app/alphabet" {
+				return item[1]
+			}
+		}
+	}
+	return undefined
+}
+
+// Resolve only the anchor spec here; CDR3/chain columns are resolved in the child (score),
+// which anchors them by the entity-key axis name — unknown until the anchor spec resolves.
+wf.prepare(func(args) {
+	bundleBuilder := wf.createPBundleBuilder()
+	bundleBuilder.ignoreMissingDomains()
+	bundleBuilder.addAnchor("main", json.decode(args.inputAnchor))
+	return {
+		columns: bundleBuilder.build()
+	}
+})
 
 wf.body(func(args) {
-  return {
-    outputs: {},
-    exports: {}
-  }
+	anchorRef := json.decode(args.inputAnchor)
+	datasetSpec := args.columns.getSpec(anchorRef)
+
+	keySpec := undefined
+	for axis in datasetSpec.axesSpec {
+		if !is_undefined(ENTITY_KEY_NAMES[axis.name]) {
+			keySpec = axis
+			break
+		}
+	}
+	if is_undefined(keySpec) {
+		ll.panic("Selected dataset has no clonotype or variant key axis")
+	}
+
+	keyDomain := is_undefined(keySpec.domain) ? {} : keySpec.domain
+	alphabet := keyDomain["pl7.app/alphabet"]
+	if is_undefined(alphabet) {
+		alphabet = alphabetFromStructure(keyDomain[keySpec.name + "/structure"])
+	}
+	if is_undefined(alphabet) {
+		ll.panic("Cannot determine CDR3 alphabet")
+	}
+
+	// Forward only trace + label, so an unrelated datasetSpec change doesn't bust the
+	// downstream cache.
+	datasetLabel := ""
+	traceAnnotations := {}
+	if !is_undefined(datasetSpec.annotations) {
+		if !is_undefined(datasetSpec.annotations["pl7.app/label"]) {
+			datasetLabel = datasetSpec.annotations["pl7.app/label"]
+		}
+		if !is_undefined(datasetSpec.annotations["pl7.app/trace"]) {
+			traceAnnotations = { "pl7.app/trace": datasetSpec.annotations["pl7.app/trace"] }
+		}
+	}
+
+	scoreResult := render.createEphemeral(scoreTpl, {
+		ctx: wf.getParentBCtx(),
+		anchorRef: anchorRef,
+		keyName: keySpec.name,
+		keySpec: keySpec,
+		alphabet: alphabet,
+		species: args.species,
+		datasetLabel: datasetLabel,
+		traceAnnotations: traceAnnotations
+	})
+
+	// Retention TTL: keeps this expensive result warm so an identical re-request within a
+	// day is recovered instead of recomputed.
+	cacheMillis := 24 * 60 * 60 * 1000
+	return {
+		outputs: {
+			pgenPf: scoreResult.output("pgenPf", cacheMillis),
+			progress: scoreResult.output("progress", cacheMillis)
+		},
+		exports: {
+			pgenPf: scoreResult.output("exportPf", cacheMillis)
+		}
+	}
 })

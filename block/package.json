@@ -41,12 +41,22 @@
       "ui": "@platforma-open/milaboratories.generation-probability.ui/dist"
     },
     "meta": {
-      "title": "generation-probability",
-      "description": "generation-probability block",
+      "title": "Generation Probability",
       "logo": "file:logos/block-logo.png",
+      "url": "https://github.com/platforma-open/generation-probability",
+      "support": "mailto:support@milaboratories.com",
+      "description": "Scores each BCR or TCR clonotype by how likely V(D)J recombination is to produce its CDR3 by chance — its generation probability (Pgen) — a clonal-rarity and germline-distance signal for lead ranking.",
+      "longDescription": "file:docs/description.md",
+      "changelog": "file:CHANGELOG.md",
+      "tags": [
+        "vdj",
+        "bcr",
+        "tcr",
+        "downstream"
+      ],
       "organization": {
-        "name": "milaboratories",
-        "url": "https://example.com",
+        "name": "MiLaboratories Inc",
+        "url": "https://milaboratories.com/",
         "logo": "file:logos/organization-logo.png"
       }
     }
