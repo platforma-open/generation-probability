@@ -1,0 +1,251 @@
+wf := import("@platforma-sdk/workflow-tengo:workflow")
+render := import("@platforma-sdk/workflow-tengo:render")
+smart := import("@platforma-sdk/workflow-tengo:smart")
+assets := import("@platforma-sdk/workflow-tengo:assets")
+pframes := import("@platforma-sdk/workflow-tengo:pframes")
+ll := import("@platforma-sdk/workflow-tengo:ll")
+json := import("json")
+
+pgenTpl := assets.importTemplate(":pgen-process")
+
+// Bulk clonotypes carry a chain name; the output label uses its human-readable form.
+CHAIN_LABELS := {
+	"IGHeavy": "Heavy",
+	"IGLight": "Light",
+	"TCRAlpha": "Alpha",
+	"TCRBeta": "Beta",
+	"TCRGamma": "Gamma",
+	"TCRDelta": "Delta"
+}
+
+// Single-cell chains are identified by receptor + slot (A/B), not a chain name.
+SC_CHAIN_LABELS := {
+	"IG": { "A": "Heavy", "B": "Light" },
+	"TCRAB": { "A": "Alpha", "B": "Beta" },
+	"TCRGD": { "A": "Gamma", "B": "Delta" }
+}
+
+// The alphabet may sit directly on the key axis domain, or inside the structured
+// key's `<key>/structure` domain as the CDR3 sequence entry's `pl7.app/alphabet`.
+alphabetFromStructure := func(structureStr) {
+	if is_undefined(structureStr) {
+		return undefined
+	}
+	for entry in json.decode(structureStr) {
+		if len(entry) == 0 || entry[0] != "pl7.app/vdj/sequence" {
+			continue
+		}
+		for idx, item in entry {
+			if idx > 0 && item[0] == "pl7.app/alphabet" {
+				return item[1]
+			}
+		}
+	}
+	return undefined
+}
+
+// Single-cell label: map (receptor, slot) via SC_CHAIN_LABELS, reading the receptor
+// off the CDR3 axis domain. Returns undefined for receptors we don't label.
+scChainLabel := func(cdr3Col, scChain) {
+	axis := cdr3Col.spec.axesSpec[0]
+	axisDomain := is_undefined(axis.domain) ? {} : axis.domain
+	receptor := axisDomain["pl7.app/vdj/receptor"]
+	if is_undefined(receptor) || is_undefined(SC_CHAIN_LABELS[receptor]) {
+		return undefined
+	}
+	return SC_CHAIN_LABELS[receptor][scChain]
+}
+
+wf.prepare(func(args) {
+	bundleBuilder := wf.createPBundleBuilder()
+	bundleBuilder.ignoreMissingDomains()
+	bundleBuilder.addAnchor("main", json.decode(args.inputAnchor))
+
+	bundleBuilder.addMulti({
+		axes: [{ anchor: "main", idx: 1 }],
+		name: "pl7.app/vdj/sequence",
+		domain: {
+			"pl7.app/vdj/feature": "CDR3"
+		}
+	}, "cdr3")
+
+	bundleBuilder.addMulti({
+		axes: [{ anchor: "main", idx: 1 }],
+		name: "pl7.app/sequence",
+		domain: {
+			"pl7.app/feature": "CDR3"
+		}
+	}, "cdr3Plain")
+
+	bundleBuilder.addMulti({
+		axes: [{ anchor: "main", idx: 1 }],
+		name: "pl7.app/vdj/chain"
+	}, "chain")
+
+	return {
+		columns: bundleBuilder.build()
+	}
+})
+
+wf.body(func(args) {
+	columns := args.columns
+	inputAnchor := json.decode(args.inputAnchor)
+	datasetSpec := columns.getSpec(inputAnchor)
+	keySpec := datasetSpec.axesSpec[1]
+	isSingleCell := keySpec.name == "pl7.app/vdj/scClonotypeKey"
+
+	keyDomain := is_undefined(keySpec.domain) ? {} : keySpec.domain
+	alphabet := keyDomain["pl7.app/alphabet"]
+	if is_undefined(alphabet) {
+		alphabet = alphabetFromStructure(keyDomain[keySpec.name + "/structure"])
+	}
+	if is_undefined(alphabet) {
+		ll.panic("Cannot determine CDR3 alphabet")
+	}
+
+	// CDR3 comes under two alternative namespaces — pl7.app/vdj/sequence (clonotype keys)
+	// and pl7.app/sequence (variantKey) — so merge both; only one is present per dataset,
+	// and getColumns returns [] for the query that matched nothing.
+	cdr3Cols := columns.getColumns("cdr3") + columns.getColumns("cdr3Plain")
+	chainCols := columns.getColumns("chain")
+
+	// The CDR3 column matching the key alphabet for a chain slot (single-cell: primary only).
+	cdr3For := func(scChain) {
+		for col in cdr3Cols {
+			if col.spec.domain["pl7.app/alphabet"] != alphabet {
+				continue
+			}
+			if isSingleCell {
+				if col.spec.domain["pl7.app/vdj/scClonotypeChain/index"] != "primary" {
+					continue
+				}
+				if col.spec.domain["pl7.app/vdj/scClonotypeChain"] != scChain {
+					continue
+				}
+			}
+			return col
+		}
+		return undefined
+	}
+
+	// The chain column for a slot, preferring the primary single-cell rearrangement.
+	chainFor := func(scChain) {
+		found := undefined
+		for col in chainCols {
+			if !isSingleCell {
+				return col
+			}
+			if col.spec.domain["pl7.app/vdj/scClonotypeChain"] != scChain {
+				continue
+			}
+			if col.spec.domain["pl7.app/vdj/scClonotypeChain/index"] == "primary" {
+				return col
+			}
+			if is_undefined(found) {
+				found = col
+			}
+		}
+		return found
+	}
+
+	// One scoring unit per chain slot: bulk => a single chainless unit; single-cell =>
+	// up to two (A, B). A slot needs both its CDR3 and chain column or it is dropped.
+	// Chains OLGA cannot model (TRG/TRD) stay in: the software returns null pgen for
+	// them, so the workflow need not track OLGA's per-locus coverage.
+	units := []
+	addUnit := func(suffix, scChain, priority) {
+		cdr3Col := cdr3For(scChain)
+		chainCol := chainFor(scChain)
+		if is_undefined(cdr3Col) || is_undefined(chainCol) {
+			return
+		}
+		label := isSingleCell ? scChainLabel(cdr3Col, scChain) : CHAIN_LABELS[keySpec.domain["pl7.app/vdj/chain"]]
+		units += [{
+			suffix: suffix,
+			scChain: scChain,
+			label: label,
+			priority: priority,
+			cdr3Col: cdr3Col,
+			chainCol: chainCol
+		}]
+	}
+	if isSingleCell {
+		addUnit("A", "A", "100")
+		addUnit("B", "B", "99")
+	} else {
+		addUnit("main", undefined, "100")
+	}
+
+	// Nothing scoreable => a valid empty p-frame, not an error. No software runs, so the
+	// model sees no "progress" output and treats the step as not-running.
+	if len(units) == 0 {
+		empty := pframes.pFrameBuilder().build()
+		return {
+			outputs: {
+				pgenPf: pframes.exportFrame(empty)
+			},
+			exports: {
+				pgenPf: empty
+			}
+		}
+	}
+
+	// Cache-key hygiene: seed the trace from only the input's trace + label, so an
+	// unrelated change in datasetSpec does not bust the process template's cache.
+	datasetLabel := ""
+	traceAnnotations := {}
+	if !is_undefined(datasetSpec.annotations) {
+		if !is_undefined(datasetSpec.annotations["pl7.app/label"]) {
+			datasetLabel = datasetSpec.annotations["pl7.app/label"]
+		}
+		if !is_undefined(datasetSpec.annotations["pl7.app/trace"]) {
+			traceAnnotations = { "pl7.app/trace": datasetSpec.annotations["pl7.app/trace"] }
+		}
+	}
+
+	// Join every unit's CDR3 + chain column into one parquet keyed by the clonotype axis
+	// (single axis: these are per-clonotype properties, not per-sample).
+	tableBuilder := pframes.parquetFileBuilder()
+	tableBuilder.setAxisHeader(keySpec, "clonotypeKey")
+	unitParams := []
+	for unit in units {
+		tableBuilder.add(unit.cdr3Col, { header: "cdr3_" + unit.suffix })
+		tableBuilder.add(unit.chainCol, { header: "chain_" + unit.suffix })
+		unitParams += [{
+			suffix: unit.suffix,
+			scChain: unit.scChain,
+			label: unit.label,
+			priority: unit.priority
+		}]
+	}
+	tableBuilder.cpu(1)
+	tableBuilder.mem("4GiB")
+	inputTable := tableBuilder.build()
+
+	processResult := render.create(pgenTpl, {
+		inputTable: inputTable,
+		params: smart.createJsonResource({
+			species: args.species,
+			alphabet: alphabet,
+			isSingleCell: isSingleCell,
+			keySpec: keySpec,
+			units: unitParams,
+			datasetLabel: datasetLabel,
+			traceAnnotations: traceAnnotations
+		})
+	})
+
+	// The 24h arg is a retention TTL, not a dedup control (dedup is content-addressed on
+	// inputs regardless): it keeps this expensive result warm so an identical re-request
+	// within a day is recovered instead of recomputed.
+	cacheMillis := 24 * 60 * 60 * 1000
+	return {
+		outputs: {
+			pgenPf: processResult.output("pgenPf", cacheMillis),
+			progress: processResult.output("progress", cacheMillis)
+		},
+		exports: {
+			pgenPf: processResult.output("exportPf", cacheMillis)
+		}
+	}
+})

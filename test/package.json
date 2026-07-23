@@ -1,0 +1,19 @@
+{
+  "name": "@platforma-open/milaboratories.generation-probability.test",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fmt": "ts-builder format",
+    "check": "ts-builder check --target block-test",
+    "test": "vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "@milaboratories/ts-builder": "catalog:",
+    "@milaboratories/ts-configs": "catalog:",
+    "@platforma-sdk/test": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "typescript": "*"
+  }
+}

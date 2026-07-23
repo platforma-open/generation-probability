@@ -1,0 +1,34 @@
+{
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "fmt": "turbo run fmt",
+    "check": "turbo run check",
+    "build:dev-local": "env PL_BUILD_CHANNEL=dev PL_BUILD_VARIANT=all PL_BUILD_LOCATION=local turbo run build",
+    "build:dev-remote": "env PL_BUILD_CHANNEL=dev PL_BUILD_VARIANT=all PL_BUILD_LOCATION=remote turbo run build",
+    "build:dev-no-software": "env PL_BUILD_CHANNEL=dev PL_BUILD_VARIANT=none turbo run build",
+    "build:dev-binary-existing": "env PL_BUILD_CHANNEL=dev PL_BUILD_USE_PUBLISHED=true turbo run build",
+    "build:release": "env PL_BUILD_CHANNEL=release PL_BUILD_VARIANT=all PL_BUILD_LOCATION=remote turbo run build",
+    "test": "env PL_BUILD_CHANNEL=dev PL_BUILD_VARIANT=binary PL_BUILD_LOCATION=local turbo run test --concurrency 1",
+    "test:dry-run": "env PL_BUILD_CHANNEL=dev PL_BUILD_VARIANT=binary PL_BUILD_LOCATION=local turbo run test --dry-run=json",
+    "mark-stable": "turbo run mark-stable",
+    "do-pack": "turbo run do-pack",
+    "watch": "turbo watch build",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "update-sdk": "block-tools structure refresh --update-deps-only",
+    "upgrade-sdk": "block-tools structure refresh --update-deps-only && pnpm i && block-tools structure refresh && pnpm i && pnpm fmt"
+  },
+  "devDependencies": {
+    "@changesets/cli": "catalog:",
+    "@milaboratories/ts-builder": "catalog:",
+    "@platforma-sdk/block-tools": "catalog:",
+    "shx": "catalog:",
+    "turbo": "catalog:"
+  },
+  "peerDependencies": {
+    "oxfmt": "*",
+    "oxlint": "*"
+  },
+  "packageManager": "pnpm@9.12.0"
+}
