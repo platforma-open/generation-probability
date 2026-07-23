@@ -1,0 +1,199 @@
+self := import("@platforma-sdk/workflow-tengo:tpl")
+render := import("@platforma-sdk/workflow-tengo:render")
+smart := import("@platforma-sdk/workflow-tengo:smart")
+assets := import("@platforma-sdk/workflow-tengo:assets")
+pframes := import("@platforma-sdk/workflow-tengo:pframes")
+pBundle := import("@platforma-sdk/workflow-tengo:pframes.bundle")
+
+pgenTpl := assets.importTemplate(":pgen-process")
+
+CHAIN_LABELS := {
+	"IGHeavy": "Heavy",
+	"IGLight": "Light",
+	"TCRAlpha": "Alpha",
+	"TCRBeta": "Beta",
+	"TCRGamma": "Gamma",
+	"TCRDelta": "Delta"
+}
+
+SC_CHAIN_LABELS := {
+	"IG": { "A": "Heavy", "B": "Light" },
+	"TCRAB": { "A": "Alpha", "B": "Beta" },
+	"TCRGD": { "A": "Gamma", "B": "Delta" }
+}
+
+chainLabel := func(keySpec, cdr3Col, scChain) {
+	if is_undefined(scChain) {
+		return CHAIN_LABELS[keySpec.domain["pl7.app/vdj/chain"]]
+	}
+	axis := cdr3Col.spec.axesSpec[0]
+	axisDomain := is_undefined(axis.domain) ? {} : axis.domain
+	receptor := axisDomain["pl7.app/vdj/receptor"]
+	if is_undefined(receptor) || is_undefined(SC_CHAIN_LABELS[receptor]) {
+		return undefined
+	}
+	return SC_CHAIN_LABELS[receptor][scChain]
+}
+
+matchDomain := func(col, required) {
+	domain := is_undefined(col.spec.domain) ? {} : col.spec.domain
+	for k, v in required {
+		if domain[k] != v {
+			return false
+		}
+	}
+	return true
+}
+firstWithDomain := func(cols, required) {
+	for col in cols {
+		if matchDomain(col, required) {
+			return col
+		}
+	}
+	return undefined
+}
+allWithDomain := func(cols, required) {
+	out := []
+	for col in cols {
+		if matchDomain(col, required) {
+			out += [col]
+		}
+	}
+	return out
+}
+
+scSlot := func(scChain) {
+	return {
+		scChain: scChain,
+		chainDomain: {
+			"pl7.app/vdj/scClonotypeChain": scChain,
+			"pl7.app/vdj/scClonotypeChain/index": "primary"
+		}
+	}
+}
+BULK_SLOT := { scChain: undefined, chainDomain: {} }
+
+self.defineOutputs("pgenPf", "exportPf", "progress")
+
+self.prepare(func(args) {
+	bundleBuilder := pBundle.createBuilder(args.ctx)
+	bundleBuilder.ignoreMissingDomains()
+	bundleBuilder.addAnchor("main", args.anchorRef)
+
+	bundleBuilder.addMulti({
+		axes: [{ anchor: "main", name: args.keyName }],
+		name: "pl7.app/vdj/sequence",
+		domain: {
+			"pl7.app/vdj/feature": "CDR3"
+		}
+	}, "cdr3")
+
+	bundleBuilder.addMulti({
+		axes: [{ anchor: "main", name: args.keyName }],
+		name: "pl7.app/sequence",
+		domain: {
+			"pl7.app/feature": "CDR3"
+		}
+	}, "cdr3Plain")
+
+	bundleBuilder.addMulti({
+		axes: [{ anchor: "main", name: args.keyName }],
+		name: "pl7.app/vdj/chain"
+	}, "chain")
+
+	return {
+		columns: bundleBuilder.build()
+	}
+})
+
+self.body(func(args) {
+	columns := args.columns
+	alphabet := args.alphabet
+	keySpec := args.keySpec
+	isSingleCell := keySpec.name == "pl7.app/vdj/scClonotypeKey"
+
+	// CDR3 lives under one of two namespaces (pl7.app/vdj/sequence for clonotype keys,
+	// pl7.app/sequence for variantKey); merge both — only one is present, the other returns [].
+	cdr3Cols := columns.getColumns("cdr3") + columns.getColumns("cdr3Plain")
+	chainCols := columns.getColumns("chain")
+
+	units := []
+	addUnit := func(slot) {
+		domain := { "pl7.app/alphabet": alphabet }
+		for k, v in slot.chainDomain {
+			domain[k] = v
+		}
+		cdr3Col := firstWithDomain(cdr3Cols, domain)
+		chainCol := firstWithDomain(chainCols, slot.chainDomain)
+		if is_undefined(cdr3Col) || is_undefined(chainCol) {
+			return
+		}
+		units += [{
+			suffix: is_undefined(slot.scChain) ? "bulk" : slot.scChain,
+			domain: domain,
+			label: chainLabel(keySpec, cdr3Col, slot.scChain),
+			cdr3Col: cdr3Col,
+			chainCol: chainCol,
+			seqCols: allWithDomain(cdr3Cols, slot.chainDomain)
+		}]
+	}
+
+	slots := isSingleCell ? [scSlot("A"), scSlot("B")] : [BULK_SLOT]
+	for slot in slots {
+		addUnit(slot)
+	}
+
+	// Nothing scoreable => an empty p-frame; the null progress resource makes the model
+	// treat the step as not-running.
+	if len(units) == 0 {
+		empty := pframes.pFrameBuilder().build()
+		return {
+			pgenPf: pframes.exportFrame(empty),
+			exportPf: empty,
+			progress: smart.createNullResource()
+		}
+	}
+
+	tableBuilder := pframes.parquetFileBuilder()
+	tableBuilder.setAxisHeader(keySpec, "clonotypeKey")
+	unitParams := []
+	for unit in units {
+		tableBuilder.add(unit.cdr3Col, { header: "cdr3_" + unit.suffix })
+		tableBuilder.add(unit.chainCol, { header: "chain_" + unit.suffix })
+		unitParams += [{
+			suffix: unit.suffix,
+			domain: unit.domain,
+			label: unit.label
+		}]
+	}
+	tableBuilder.cpu(1)
+	tableBuilder.mem("4GiB")
+	inputTable := tableBuilder.build()
+
+	// Specs in a keyed map so ordering can't perturb the params hash; data passed separately.
+	renderInputs := { inputTable: inputTable }
+	seqSpecs := {}
+	for unit in units {
+		for col in unit.seqCols {
+			seqId := "seq_" + unit.suffix + "_" + col.spec.domain["pl7.app/alphabet"]
+			seqSpecs[seqId] = col.spec
+			renderInputs["seqData_" + seqId] = col.data
+		}
+	}
+	renderInputs.params = smart.createJsonResource({
+		species: args.species,
+		alphabet: alphabet,
+		keySpec: keySpec,
+		units: unitParams,
+		seqSpecs: seqSpecs,
+		datasetLabel: args.datasetLabel,
+		traceAnnotations: args.traceAnnotations
+	})
+	processResult := render.create(pgenTpl, renderInputs)
+
+	return {
+		pgenPf: processResult.output("pgenPf"),
+		exportPf: processResult.output("exportPf"),
+		progress: processResult.output("progress")
+	}
+})

@@ -1,0 +1,121 @@
+self := import("@platforma-sdk/workflow-tengo:tpl")
+exec := import("@platforma-sdk/workflow-tengo:exec")
+f := import("@platforma-sdk/workflow-tengo:exec.formula")
+assets := import("@platforma-sdk/workflow-tengo:assets")
+pframes := import("@platforma-sdk/workflow-tengo:pframes")
+pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
+xsv := import("@platforma-sdk/workflow-tengo:pframes.xsv")
+
+pgenSw := assets.importSoftware("@platforma-open/milaboratories.generation-probability.software:main")
+
+self.defineOutputs("pgenPf", "exportPf", "progress")
+
+self.body(func(args) {
+	params := args.params
+	units := params.units
+
+	cmd := exec.builder().
+		software(pgenSw).
+		addFile("input.parquet", args.inputTable, { tag: "input" }).
+		arg("--input").arg("input.parquet").
+		arg("--output").arg("result.parquet").
+		arg("--species").arg(params.species).
+		arg("--alphabet").arg(params.alphabet).
+		arg("--key-column").arg("clonotypeKey")
+	for unit in units {
+		cmd = cmd.arg("--sequence-column").arg("cdr3_" + unit.suffix)
+		cmd = cmd.arg("--chain-column").arg("chain_" + unit.suffix)
+		cmd = cmd.arg("--pgen-column").arg("pgen_" + unit.suffix)
+		cmd = cmd.arg("--neg-log-pgen-column").arg("neglog_" + unit.suffix)
+	}
+	cmd = cmd.arg("--workers").argExpr("{system.cpu}")
+
+	// Resources scale with input parquet size (bytes track clonotype count): CPU ~ 1 core/MiB
+	// clamped [2, 16]; RAM ~ 4x input (decompressed strings + ~130 MB/worker) clamped [4, 32]
+	// GiB. Static fallbacks cover backends that can't evaluate formulas.
+	run := cmd.
+		saveFile("result.parquet").
+		saveStderrStream().
+		resources({
+			queue: "heavy",
+			onCPU: {
+				cpu: f.size("input").dividedBy(f.mib(1)).between(2, 16).staticFallback(8),
+				ram: f.size("input").times(4).between(f.gib(4), f.gib(32)).staticFallback(f.gib(8))
+			}
+		}).
+		run()
+
+	resultTable := run.getFile("result.parquet")
+
+	trace := pSpec.makeTrace({ annotations: params.traceAnnotations }, {
+		type: "milaboratories.generation-probability",
+		importance: 30,
+		label: "Generation Probability"
+	})
+
+	columnSpecs := []
+	orderedIds := []
+	for unit in units {
+		pgenId := "pgen_" + unit.suffix
+		negId := "neglog_" + unit.suffix
+
+		labelSuffix := ""
+		if !is_undefined(unit.label) && unit.label != "" {
+			labelSuffix = " (" + unit.label + ")"
+		}
+
+		columnSpecs += [{
+			column: pgenId,
+			id: pgenId,
+			allowNA: true,
+			spec: {
+				name: "pl7.app/vdj/generationProbability",
+				valueType: "Double",
+				domain: unit.domain,
+				annotations: {
+					"pl7.app/label": "Generation probability" + labelSuffix,
+					"pl7.app/format": ".2e"
+				}
+			}
+		}, {
+			column: negId,
+			id: negId,
+			allowNA: true,
+			spec: {
+				name: "pl7.app/vdj/minlog10GenerationProbability",
+				valueType: "Double",
+				domain: unit.domain,
+				annotations: {
+					"pl7.app/label": "-log10 generation probability" + labelSuffix,
+					"pl7.app/format": ".2f"
+				}
+			}
+		}]
+		orderedIds += [pgenId, negId]
+	}
+
+	imported := xsv.importFile(resultTable, "parquet", {
+		axes: [{ column: "clonotypeKey", spec: params.keySpec }],
+		columns: columnSpecs,
+		storageFormat: "Parquet",
+		partitionKeyLength: 0
+	}, { splitDataAndSpec: true, cpu: 1, mem: "4GiB" })
+
+	outputBuilder := pframes.pFrameBuilder()
+	exportBuilder := pframes.pFrameBuilder()
+	for id in orderedIds {
+		column := imported[id]
+		outputBuilder.add(id, column.spec, column.data)
+		exportBuilder.add(id, trace.inject(column.spec), column.data)
+	}
+
+	for seqId, seqSpec in params.seqSpecs {
+		outputBuilder.add(seqId, seqSpec, args["seqData_" + seqId])
+	}
+
+	return {
+		pgenPf: pframes.exportFrame(outputBuilder.build()),
+		exportPf: exportBuilder.build(),
+		progress: run.getStderrStream()
+	}
+})
