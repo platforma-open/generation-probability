@@ -1,4 +1,4 @@
-# @platforma-open/milaboratories.generation-probability.block
+# @platforma-open/milaboratories.generation-probability.software
 
 ## 1.0.0
 

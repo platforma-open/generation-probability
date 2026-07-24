@@ -1,4 +1,4 @@
-# @platforma-open/milaboratories.generation-probability.block
+# @platforma-open/milaboratories.generation-probability.ui
 
 ## 1.0.0
 
@@ -12,3 +12,8 @@
     model resolved from dataset species and per-chain locus metadata.
   - Emits raw Pgen and -log10(Pgen) per chain (heavy/light for BCR,
     beta/alpha for TCR).
+
+### Patch Changes
+
+- Updated dependencies [1026dfe]
+  - @platforma-open/milaboratories.generation-probability.model@1.0.0
