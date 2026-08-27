@@ -5,6 +5,7 @@ assets := import("@platforma-sdk/workflow-tengo:assets")
 pframes := import("@platforma-sdk/workflow-tengo:pframes")
 pBundle := import("@platforma-sdk/workflow-tengo:pframes.bundle")
 pt := import("@platforma-sdk/workflow-tengo:pt")
+ll := import("@platforma-sdk/workflow-tengo:ll")
 
 pgenTpl := assets.importTemplate(":pgen-process")
 
@@ -150,6 +151,30 @@ self.body(func(args) {
 	cdr3Cols := columns.getColumns("cdr3") + columns.getColumns("cdr3Plain")
 	chainCols := columns.getColumns("chain")
 
+	// The key axis states the alphabet for a clonotype key, directly or inside its structure, and
+	// that is authoritative: a MiXCR set emits both nt and aa CDR3 columns and the axis is what
+	// says which of them defines the clonotype. Only when the axis said nothing -- an imported
+	// set -- read it off the columns, which do carry pl7.app/alphabet.
+	if alphabet == "" {
+		for col in cdr3Cols {
+			if is_undefined(col.spec.domain) {
+				continue
+			}
+			colAlphabet := col.spec.domain["pl7.app/alphabet"]
+			if is_undefined(colAlphabet) {
+				continue
+			}
+			if alphabet == "" {
+				alphabet = colAlphabet
+			} else if alphabet != colAlphabet {
+				ll.panic("Cannot determine CDR3 alphabet: the key axis states none and the CDR3 columns disagree (%v vs %v)", alphabet, colAlphabet)
+			}
+		}
+		if alphabet == "" {
+			ll.panic("Cannot determine CDR3 alphabet: the key axis states none and no CDR3 column carries pl7.app/alphabet")
+		}
+	}
+
 	// A paired imported set carries both chains in one frame under the scClonotypeChain column
 	// domain, on a variantKey axis — so the axis name alone would call it bulk, and the bulk slot
 	// takes the first CDR3 column it finds and drops the other chain.
@@ -175,7 +200,7 @@ self.body(func(args) {
 		}
 
 		// Preferred: the per-row locus column. An imported set has none, so fall back to the
-		// unit's single mapped chain and materialise it as a constant column below. Without a
+		// unit's single mapped chain and materialize it as a constant column below. Without a
 		// locus from either source there is nothing to score against.
 		chainCol := firstWithDomain(chainCols, slot.chainDomain)
 		chainLiteral := undefined

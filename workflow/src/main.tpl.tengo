@@ -62,16 +62,12 @@ wf.body(func(args) {
 	if is_undefined(alphabet) {
 		alphabet = alphabetFromStructure(keyDomain[keySpec.name + "/structure"])
 	}
-	// An imported receptor set carries neither source: no pl7.app/alphabet on the key axis, and
-	// no <key>/structure -- that key belongs to the scClonotypeKey vocabulary this axis does not
-	// use, and no variantKey producer emits one. Its sequences are amino acid throughout, so
-	// that is the answer rather than a failure.
-	if is_undefined(alphabet) && keySpec.name == "pl7.app/variantKey" &&
-		!is_undefined(keyDomain["pl7.app/vdj/clonotypingRunId"]) {
-		alphabet = "aminoacid"
-	}
+	// An imported receptor set states it in neither place: no pl7.app/alphabet on the key axis,
+	// and no <key>/structure -- that key belongs to the scClonotypeKey vocabulary this axis does
+	// not use. Its sequence columns do carry it, so resolution is finished in the score template
+	// where the columns are in hand; "" means "the axis did not say".
 	if is_undefined(alphabet) {
-		ll.panic("Cannot determine CDR3 alphabet")
+		alphabet = ""
 	}
 
 	// Forward only trace + label, so an unrelated datasetSpec change doesn't bust the

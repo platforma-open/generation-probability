@@ -14,9 +14,12 @@ an imported set does not have — so it never appeared as an option at all. Its 
 of the whole set, recorded on the key axis, and that is now accepted as an alternative.
 
 The CDR3 alphabet was read from `pl7.app/alphabet` on the key axis or from a `<key>/structure`
-domain key. An imported set carries neither — the structure key belongs to the `scClonotypeKey`
-vocabulary its axis does not use — so the run died on "Cannot determine CDR3 alphabet". Such a set
-is amino acid throughout, which is now the answer.
+domain key. An imported set states it in neither — the structure key belongs to the
+`scClonotypeKey` vocabulary its axis does not use — so the run died on "Cannot determine CDR3
+alphabet". Its sequence columns do carry the alphabet, so that is where it is now read from when
+the axis says nothing. The axis stays authoritative when it does say something: a MiXCR set emits
+both nucleotide and amino-acid CDR3 columns, and the axis is what says which of them defines the
+clonotype.
 
 Scoring needed a per-row locus column and quietly produced an empty result without one. The
 scorer's input table is now assembled in a single pass that appends a constant locus column for a
