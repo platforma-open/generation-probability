@@ -226,9 +226,15 @@ self.body(func(args) {
 	tableBuilder := pframes.parquetFileBuilder()
 	tableBuilder.setAxisHeader(keySpec, "clonotypeKey")
 	unitParams := []
+	chainExprs := []
 	for unit in units {
 		tableBuilder.add(unit.cdr3Col, { header: "cdr3_" + unit.suffix })
-		if !is_undefined(unit.chainCol) {
+		if is_undefined(unit.chainCol) {
+			// A unit with a constant locus has no column to add; queue it as a literal for the
+			// pass below instead of teaching the scorer about constants, which keeps main.py a
+			// pure per-row scorer and the software package unchanged.
+			chainExprs += [pt.lit(unit.chainLiteral).alias("chain_" + unit.suffix)]
+		} else {
 			tableBuilder.add(unit.chainCol, { header: "chain_" + unit.suffix })
 		}
 		unitParams += [{
@@ -241,27 +247,13 @@ self.body(func(args) {
 	tableBuilder.mem("4GiB")
 	inputTable := tableBuilder.build()
 
-	// Units with a constant locus carry no chain column, so add one here rather than teaching
-	// the scorer about constants: main.py stays a pure per-row scorer and the software package
-	// stays unchanged — no version bump, no image rebuild for a change that is purely about
-	// where the locus comes from.
-	//
-	// Only runs when a literal is actually needed, so bulk and single-cell inputs keep exactly
-	// the graph they had: no extra step, no extra parquet pass.
-	literalUnits := []
-	for unit in units {
-		if !is_undefined(unit.chainLiteral) {
-			literalUnits += [unit]
-		}
-	}
-	if len(literalUnits) > 0 {
+	// Only when a literal is actually needed, so bulk and single-cell inputs keep exactly the
+	// graph they had: no extra step, no extra parquet pass.
+	if len(chainExprs) > 0 {
 		ptWf := pt.workflow().mem("4GiB").cpu(1)
-		df := ptWf.frame(inputTable, { xsvType: "parquet" })
-		exprs := []
-		for unit in literalUnits {
-			exprs += [pt.lit(unit.chainLiteral).alias("chain_" + unit.suffix)]
-		}
-		df.withColumns(exprs...).save("with-chain.parquet")
+		ptWf.frame(inputTable, { xsvType: "parquet" }).
+			withColumns(chainExprs...).
+			save("with-chain.parquet")
 		inputTable = ptWf.run().getFile("with-chain.parquet")
 	}
 
