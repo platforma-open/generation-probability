@@ -26,13 +26,11 @@ RECEPTOR_CHAINS := {
 	"TCRGD": { "A": "TCRDelta", "B": "TCRGamma" }
 }
 
-// The OLGA locus each chain maps to. IGLight is deliberately not a locus: OLGA needs IGK and
-// IGL as separate models and an imported set does not record which, so it is passed through
-// unchanged — the scorer skips any chain it has no model for and names it in the skipped-chains
-// report, which the model already surfaces.
+// The OLGA locus each chain maps to. A chain is absent here only when no locus can be named
+// for it at all: an imported light chain is "IG Light", and OLGA needs IGK and IGL as separate
+// models, so which one it is simply is not recorded.
 CHAIN_LOCUS := {
 	"IGHeavy": "IGH",
-	"IGLight": "IGLight",
 	"TCRAlpha": "TRA",
 	"TCRBeta": "TRB",
 	"TCRGamma": "TRG",
@@ -158,8 +156,8 @@ self.body(func(args) {
 	isSingleCell := keySpec.name == "pl7.app/vdj/scClonotypeKey"
 	if !isSingleCell && keySpec.name == "pl7.app/variantKey" {
 		for col in cdr3Cols {
-			colDomain := is_undefined(col.spec.domain) ? {} : col.spec.domain
-			if !is_undefined(colDomain["pl7.app/vdj/scClonotypeChain/index"]) {
+			if !is_undefined(col.spec.domain) &&
+				!is_undefined(col.spec.domain["pl7.app/vdj/scClonotypeChain/index"]) {
 				isSingleCell = true
 			}
 		}
@@ -184,10 +182,17 @@ self.body(func(args) {
 		label := chainLabel(keySpec, cdr3Col, slot.scChain)
 		if is_undefined(chainCol) {
 			chain := bareChain(keySpec, slot.scChain)
-			if is_undefined(chain) || is_undefined(CHAIN_LOCUS[chain]) {
+			if is_undefined(chain) {
 				return
 			}
+			// With no locus for this chain, send its own name: the scorer has no model under
+			// that name either, so it leaves the score null and reports the name — which the
+			// block shows as a banner. Dropping the unit instead would lose the chain with
+			// nothing on screen to say so.
 			chainLiteral = CHAIN_LOCUS[chain]
+			if is_undefined(chainLiteral) {
+				chainLiteral = chain
+			}
 			label = CHAIN_LABELS[chain]
 		}
 
