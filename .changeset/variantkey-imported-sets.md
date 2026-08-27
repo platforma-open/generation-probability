@@ -4,10 +4,10 @@
 '@platforma-open/milaboratories.generation-probability.block': minor
 ---
 
-Score imported receptor sets keyed on pl7.app/variantKey
+Score imported receptor sets, and fix swapped chain labels on single-cell TCR data
 
-An imported set from Import VDJ Data was offered nowhere and scored nothing. Four separate
-things stopped it, each failing differently:
+**Imported receptor sets.** A set from Import VDJ Data was offered nowhere and scored nothing.
+Four separate things stopped it, each failing differently.
 
 The dataset dropdown filtered on the presence of a per-record `pl7.app/vdj/chain` column, which
 an imported set does not have — so it never appeared as an option at all. Its locus is a property
@@ -15,13 +15,13 @@ of the whole set, recorded on the key axis, and that is now accepted as an alter
 
 The CDR3 alphabet was read from `pl7.app/alphabet` on the key axis or from a `<key>/structure`
 domain key. An imported set carries neither — the structure key belongs to the `scClonotypeKey`
-vocabulary its axis does not use — so the run died on "Cannot determine CDR3 alphabet". Such a
-set is amino acid throughout, which is now the answer.
+vocabulary its axis does not use — so the run died on "Cannot determine CDR3 alphabet". Such a set
+is amino acid throughout, which is now the answer.
 
-Scoring needed a per-row locus column and quietly produced an empty result without one. A unit
-whose locus is constant now gets that column added by a `pt` step over the built table, so the
-scoring script is unchanged and still simply reads a locus per row. The step runs only when a
-constant is actually needed, so bulk and single-cell inputs keep the graph they had.
+Scoring needed a per-row locus column and quietly produced an empty result without one. The
+scorer's input table is now assembled in a single pass that appends a constant locus column for a
+unit whose locus is the same for every row, so the scoring script is unchanged and still simply
+reads a locus per row.
 
 Whether the two chains are scored separately followed the key axis being
 `pl7.app/vdj/scClonotypeKey`. A paired imported set carries both chains in one frame under the
@@ -31,8 +31,16 @@ follows the column domain.
 
 **A light chain from an imported set is reported as skipped, not scored.** OLGA needs IGK and IGL
 as separate models and an imported set records only "IG Light", so the locus is genuinely unknown.
-Rather than guess, the light unit is passed through as `IGLight`, gets no Pgen, and is named in
-the block's existing skipped-chains message. Heavy chains (IGH) and TCR alpha/beta (TRA, TRB) are
-scored normally.
+Rather than guess, the light unit keeps its chain name, gets no Pgen, and is named in the block's
+existing skipped-chains banner. Heavy chains (IGH) and TCR alpha/beta (TRA, TRB) score normally.
 
-Bulk, single-cell, peptide and amplicon inputs are unaffected.
+**Swapped chain labels.** MiXCR fixes "A" as the more diverse chain — the one that recombines a D
+segment — so a receptor's chain order is TCRBeta/TCRAlpha and TCRDelta/TCRGamma, not alphabetical.
+The label table read A as Alpha and B as Beta, so on a single-cell TCR alpha/beta dataset the alpha
+column was labelled "Generation probability (Beta)" and the beta column "(Alpha)". Gamma/delta was
+swapped the same way. The Pgen values were always right — the locus came from the per-record chain
+column, never from the A/B letter — but a mislabelled column reads as the wrong chain's result.
+Labels are now derived from the chain that the A/B slot resolves to, through the single table that
+also decides the locus, so a label cannot disagree with the model that produced the value beside it.
+
+Bulk, single-cell IG, peptide and amplicon inputs are unaffected.

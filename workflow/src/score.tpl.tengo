@@ -228,39 +228,48 @@ self.body(func(args) {
 		}
 	}
 
-	tableBuilder := pframes.parquetFileBuilder()
-	tableBuilder.setAxisHeader(keySpec, "clonotypeKey")
-	unitParams := []
+	// The scorer's input table, assembled in one pass. pt joins the bundle columns on the key
+	// axis under the header names the scorer expects, and appends a constant column for a unit
+	// whose locus is one value for every row. Assembling with parquetFileBuilder and then
+	// running pt to add that constant wrote the whole table twice.
+	//
+	// The columns are named here rather than via frameFromColumnBundle: that helper decodes
+	// each pool key as JSON, and an addMulti result is keyed "<resultKey>.<canonical ref>"
+	// (pframes/bundle.lib.tengo:399), which is not JSON — it fails inside the helper.
+	ptWf := pt.workflow().mem("4GiB").cpu(1)
+
+	entries := []
+	selects := [pt.sc.axis(keySpec).alias("clonotypeKey")]
 	chainExprs := []
+	unitParams := []
 	for unit in units {
-		tableBuilder.add(unit.cdr3Col, { header: "cdr3_" + unit.suffix })
+		cdr3Name := "cdr3_" + unit.suffix
+		entries += [pt.p.column(cdr3Name, { spec: unit.cdr3Col.spec, data: unit.cdr3Col.data })]
+		selects += [pt.col(cdr3Name)]
+
+		chainName := "chain_" + unit.suffix
 		if is_undefined(unit.chainCol) {
-			// A unit with a constant locus has no column to add; queue it as a literal for the
-			// pass below instead of teaching the scorer about constants, which keeps main.py a
-			// pure per-row scorer and the software package unchanged.
-			chainExprs += [pt.lit(unit.chainLiteral).alias("chain_" + unit.suffix)]
+			// No column to join: this unit's locus is a property of the whole set. Appending it
+			// here keeps main.py a pure per-row scorer and the software package unchanged.
+			chainExprs += [pt.lit(unit.chainLiteral).alias(chainName)]
 		} else {
-			tableBuilder.add(unit.chainCol, { header: "chain_" + unit.suffix })
+			entries += [pt.p.column(chainName, { spec: unit.chainCol.spec, data: unit.chainCol.data })]
+			selects += [pt.col(chainName)]
 		}
+
 		unitParams += [{
 			suffix: unit.suffix,
 			domain: unit.domain,
 			label: unit.label
 		}]
 	}
-	tableBuilder.cpu(TABLE_CPU)
-	tableBuilder.mem(TABLE_MEM)
-	inputTable := tableBuilder.build()
 
-	// Only when a literal is actually needed, so bulk and single-cell inputs keep exactly the
-	// graph they had: no extra step, no extra parquet pass.
+	df := ptWf.frame(pt.p.full(entries...)).select(selects...)
 	if len(chainExprs) > 0 {
-		ptWf := pt.workflow().mem(TABLE_MEM).cpu(TABLE_CPU)
-		ptWf.frame(inputTable, { xsvType: "parquet" }).
-			withColumns(chainExprs...).
-			save("with-chain.parquet")
-		inputTable = ptWf.run().getFile("with-chain.parquet")
+		df = df.withColumns(chainExprs...)
 	}
+	df.save("input.parquet")
+	inputTable := ptWf.run().getFile("input.parquet")
 
 	// Specs in a keyed map so ordering can't perturb the params hash; data passed separately.
 	renderInputs := { inputTable: inputTable }
