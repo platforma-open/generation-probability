@@ -8,11 +8,6 @@ pt := import("@platforma-sdk/workflow-tengo:pt")
 
 pgenTpl := assets.importTemplate(":pgen-process")
 
-// Both passes over the input table are column shuffles, not computation — assembling it
-// and appending a constant cost the same, so they share one budget.
-TABLE_CPU := 1
-TABLE_MEM := "4GiB"
-
 CHAIN_LABELS := {
 	"IGHeavy": "Heavy",
 	"IGLight": "Light",
