@@ -32,20 +32,23 @@ export type BlockData = {
   distributionGraphState: GraphMakerState;
 };
 
-const inputSelectors = [
-  {
-    axes: [{ name: "pl7.app/vdj/clonotypeKey" }],
-    annotations: { "pl7.app/isAnchor": "true" },
-  },
-  {
-    axes: [{ name: "pl7.app/vdj/scClonotypeKey" }],
-    annotations: { "pl7.app/isAnchor": "true" },
-  },
-  {
-    axes: [{ name: "pl7.app/variantKey" }],
-    annotations: { "pl7.app/isAnchor": "true" },
-  },
-];
+// The axes a dataset can be keyed on, mirroring ENTITY_KEY_NAMES in main.tpl.tengo. Both the
+// selectors and the scorability check below are derived from this one list so they cannot drift.
+const ENTITY_KEY_NAMES = [
+  "pl7.app/vdj/clonotypeKey",
+  "pl7.app/vdj/scClonotypeKey",
+  "pl7.app/variantKey",
+] as const;
+
+const inputSelectors = ENTITY_KEY_NAMES.map((name) => ({
+  axes: [{ name }],
+  annotations: { "pl7.app/isAnchor": "true" },
+}));
+
+// The key axis is found by name, never by position: which index it sits at is a property of the
+// producer, and main.tpl.tengo searches for it the same way rather than assuming one.
+const keyAxisOf = (spec: { axesSpec: { name: string; domain?: Record<string, string> }[] }) =>
+  spec.axesSpec.find((axis) => (ENTITY_KEY_NAMES as readonly string[]).includes(axis.name));
 
 const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
   datasetLabel: "",
@@ -83,7 +86,7 @@ export const platforma = BlockModelV3.create(dataModel)
       collection
         .getColumns()
         .filter((anchor) => {
-          const keyAxis = anchor.getSpec().axesSpec[1];
+          const keyAxis = keyAxisOf(anchor.getSpec());
           const keyDomain = keyAxis?.domain ?? {};
           if (
             keyAxis?.name === "pl7.app/variantKey" &&
