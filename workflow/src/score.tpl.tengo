@@ -8,6 +8,11 @@ pt := import("@platforma-sdk/workflow-tengo:pt")
 
 pgenTpl := assets.importTemplate(":pgen-process")
 
+// Both passes over the input table are column shuffles, not computation — assembling it
+// and appending a constant cost the same, so they share one budget.
+TABLE_CPU := 1
+TABLE_MEM := "4GiB"
+
 CHAIN_LABELS := {
 	"IGHeavy": "Heavy",
 	"IGLight": "Light",
@@ -243,14 +248,14 @@ self.body(func(args) {
 			label: unit.label
 		}]
 	}
-	tableBuilder.cpu(1)
-	tableBuilder.mem("4GiB")
+	tableBuilder.cpu(TABLE_CPU)
+	tableBuilder.mem(TABLE_MEM)
 	inputTable := tableBuilder.build()
 
 	// Only when a literal is actually needed, so bulk and single-cell inputs keep exactly the
 	// graph they had: no extra step, no extra parquet pass.
 	if len(chainExprs) > 0 {
-		ptWf := pt.workflow().mem("4GiB").cpu(1)
+		ptWf := pt.workflow().mem(TABLE_MEM).cpu(TABLE_CPU)
 		ptWf.frame(inputTable, { xsvType: "parquet" }).
 			withColumns(chainExprs...).
 			save("with-chain.parquet")
