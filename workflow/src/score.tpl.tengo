@@ -4,8 +4,30 @@ smart := import("@platforma-sdk/workflow-tengo:smart")
 assets := import("@platforma-sdk/workflow-tengo:assets")
 pframes := import("@platforma-sdk/workflow-tengo:pframes")
 pBundle := import("@platforma-sdk/workflow-tengo:pframes.bundle")
+pt := import("@platforma-sdk/workflow-tengo:pt")
+ll := import("@platforma-sdk/workflow-tengo:ll")
+json := import("json")
 
 pgenTpl := assets.importTemplate(":pgen-process")
+
+// The alphabet may sit directly on the key axis domain, or nested in the structured key's
+// `<key>/structure` domain under the CDR3 sequence entry.
+alphabetFromStructure := func(structureStr) {
+	if is_undefined(structureStr) {
+		return undefined
+	}
+	for entry in json.decode(structureStr) {
+		if len(entry) == 0 || entry[0] != "pl7.app/vdj/sequence" {
+			continue
+		}
+		for idx, item in entry {
+			if idx > 0 && item[0] == "pl7.app/alphabet" {
+				return item[1]
+			}
+		}
+	}
+	return undefined
+}
 
 CHAIN_LABELS := {
 	"IGHeavy": "Heavy",
@@ -16,23 +38,40 @@ CHAIN_LABELS := {
 	"TCRDelta": "Delta"
 }
 
-SC_CHAIN_LABELS := {
-	"IG": { "A": "Heavy", "B": "Light" },
-	"TCRAB": { "A": "Alpha", "B": "Beta" },
-	"TCRGD": { "A": "Gamma", "B": "Delta" }
+// Which chain each A/B slot holds. MiXCR fixes "A" as the more diverse chain — the one that
+// recombines a D segment — so a receptor's chain order is TCRBeta/TCRAlpha and
+// TCRDelta/TCRGamma, not alphabetical (mixcr-clonotyping/workflow/src/process.tpl.tengo:43,695).
+RECEPTOR_CHAINS := {
+	"IG": { "A": "IGHeavy", "B": "IGLight" },
+	"TCRAB": { "A": "TCRBeta", "B": "TCRAlpha" },
+	"TCRGD": { "A": "TCRDelta", "B": "TCRGamma" }
 }
 
+// The OLGA locus each chain maps to. A chain is absent here only when no locus can be named
+// for it at all: an imported light chain is "IG Light", and OLGA needs IGK and IGL as separate
+// models, so which one it is simply is not recorded.
+CHAIN_LOCUS := {
+	"IGHeavy": "IGH",
+	"TCRAlpha": "TRA",
+	"TCRBeta": "TRB",
+	"TCRGamma": "TRG",
+	"TCRDelta": "TRD"
+}
+
+// Labels come from the chain, and the A/B slot resolves to a chain through RECEPTOR_CHAINS —
+// the same table the locus is derived from, so a label can never disagree with the model that
+// produced the value beside it.
 chainLabel := func(keySpec, cdr3Col, scChain) {
 	if is_undefined(scChain) {
 		return CHAIN_LABELS[keySpec.domain["pl7.app/vdj/chain"]]
 	}
 	axis := cdr3Col.spec.axesSpec[0]
 	axisDomain := is_undefined(axis.domain) ? {} : axis.domain
-	receptor := axisDomain["pl7.app/vdj/receptor"]
-	if is_undefined(receptor) || is_undefined(SC_CHAIN_LABELS[receptor]) {
+	byLetter := RECEPTOR_CHAINS[axisDomain["pl7.app/vdj/receptor"]]
+	if is_undefined(byLetter) {
 		return undefined
 	}
-	return SC_CHAIN_LABELS[receptor][scChain]
+	return CHAIN_LABELS[byLetter[scChain]]
 }
 
 matchDomain := func(col, required) {
@@ -73,6 +112,22 @@ scSlot := func(scChain) {
 }
 BULK_SLOT := { scChain: undefined, chainDomain: {} }
 
+
+// An imported receptor set carries no per-record pl7.app/vdj/chain column: the locus is a
+// property of the whole unit. Resolve it from the chain the scientist mapped — on the key axis
+// for a single-chain set, from the receptor plus the A/B slot for a paired one.
+bareChain := func(keySpec, scChain) {
+	keyDomain := is_undefined(keySpec.domain) ? {} : keySpec.domain
+	if is_undefined(scChain) {
+		return keyDomain["pl7.app/vdj/chain"]
+	}
+	byLetter := RECEPTOR_CHAINS[keyDomain["pl7.app/vdj/receptor"]]
+	if is_undefined(byLetter) {
+		return undefined
+	}
+	return byLetter[scChain]
+}
+
 self.defineOutputs("pgenPf", "exportPf", "progress")
 
 self.prepare(func(args) {
@@ -108,14 +163,54 @@ self.prepare(func(args) {
 
 self.body(func(args) {
 	columns := args.columns
-	alphabet := args.alphabet
 	keySpec := args.keySpec
-	isSingleCell := keySpec.name == "pl7.app/vdj/scClonotypeKey"
 
 	// CDR3 lives under one of two namespaces (pl7.app/vdj/sequence for clonotype keys,
 	// pl7.app/sequence for variantKey); merge both — only one is present, the other returns [].
 	cdr3Cols := columns.getColumns("cdr3") + columns.getColumns("cdr3Plain")
 	chainCols := columns.getColumns("chain")
+
+	// Which alphabet the CDR3 is scored in. The key axis is authoritative wherever it speaks,
+	// directly or inside its structure key: a MiXCR set emits both nt and aa CDR3 columns, and
+	// the axis is what says which of them defines the clonotype. An imported set's axis states
+	// neither, so fall back to the columns, which do carry pl7.app/alphabet.
+	keyDomain := is_undefined(keySpec.domain) ? {} : keySpec.domain
+	alphabet := keyDomain["pl7.app/alphabet"]
+	if is_undefined(alphabet) {
+		alphabet = alphabetFromStructure(keyDomain[keySpec.name + "/structure"])
+	}
+	if is_undefined(alphabet) {
+		for col in cdr3Cols {
+			if is_undefined(col.spec.domain) {
+				continue
+			}
+			colAlphabet := col.spec.domain["pl7.app/alphabet"]
+			if is_undefined(colAlphabet) {
+				continue
+			}
+			if is_undefined(alphabet) {
+				alphabet = colAlphabet
+			} else if alphabet != colAlphabet {
+				ll.panic("Cannot determine CDR3 alphabet: the key axis states none and the CDR3 columns disagree (%v vs %v)", alphabet, colAlphabet)
+			}
+		}
+	}
+	if is_undefined(alphabet) {
+		ll.panic("Cannot determine CDR3 alphabet: neither the key axis nor any CDR3 column states one")
+	}
+
+	// A paired imported set carries both chains in one frame under the scClonotypeChain column
+	// domain, on a variantKey axis — so the axis name alone would call it bulk, and the bulk slot
+	// takes the first CDR3 column it finds and drops the other chain.
+	isSingleCell := keySpec.name == "pl7.app/vdj/scClonotypeKey"
+	if keySpec.name == "pl7.app/variantKey" {
+		for col in cdr3Cols {
+			if !is_undefined(col.spec.domain) &&
+				!is_undefined(col.spec.domain["pl7.app/vdj/scClonotypeChain/index"]) {
+				isSingleCell = true
+			}
+		}
+	}
 
 	units := []
 	addUnit := func(slot) {
@@ -124,16 +219,39 @@ self.body(func(args) {
 			domain[k] = v
 		}
 		cdr3Col := firstWithDomain(cdr3Cols, domain)
-		chainCol := firstWithDomain(chainCols, slot.chainDomain)
-		if is_undefined(cdr3Col) || is_undefined(chainCol) {
+		if is_undefined(cdr3Col) {
 			return
 		}
+
+		// Preferred: the per-row locus column. An imported set has none, so fall back to the
+		// unit's single mapped chain and materialize it as a constant column below. Without a
+		// locus from either source there is nothing to score against.
+		chainCol := firstWithDomain(chainCols, slot.chainDomain)
+		chainLiteral := undefined
+		label := chainLabel(keySpec, cdr3Col, slot.scChain)
+		if is_undefined(chainCol) {
+			chain := bareChain(keySpec, slot.scChain)
+			if is_undefined(chain) {
+				return
+			}
+			// With no locus for this chain, send its own name: the scorer has no model under
+			// that name either, so it leaves the score null and reports the name — which the
+			// block shows as a banner. Dropping the unit instead would lose the chain with
+			// nothing on screen to say so.
+			chainLiteral = CHAIN_LOCUS[chain]
+			if is_undefined(chainLiteral) {
+				chainLiteral = chain
+			}
+			label = CHAIN_LABELS[chain]
+		}
+
 		units += [{
 			suffix: is_undefined(slot.scChain) ? "bulk" : slot.scChain,
 			domain: domain,
-			label: chainLabel(keySpec, cdr3Col, slot.scChain),
+			label: label,
 			cdr3Col: cdr3Col,
 			chainCol: chainCol,
+			chainLiteral: chainLiteral,
 			seqCols: allWithDomain(cdr3Cols, slot.chainDomain)
 		}]
 	}
@@ -154,21 +272,48 @@ self.body(func(args) {
 		}
 	}
 
-	tableBuilder := pframes.parquetFileBuilder()
-	tableBuilder.setAxisHeader(keySpec, "clonotypeKey")
+	// The scorer's input table, assembled in one pass. pt joins the bundle columns on the key
+	// axis under the header names the scorer expects, and appends a constant column for a unit
+	// whose locus is one value for every row. Assembling with parquetFileBuilder and then
+	// running pt to add that constant wrote the whole table twice.
+	//
+	// The columns are named here rather than via frameFromColumnBundle: that helper decodes
+	// each pool key as JSON, and an addMulti result is keyed "<resultKey>.<canonical ref>"
+	// (pframes/bundle.lib.tengo:399), which is not JSON — it fails inside the helper.
+	ptWf := pt.workflow().mem("4GiB").cpu(1)
+
+	entries := []
+	selects := [pt.sc.axis(keySpec).alias("clonotypeKey")]
+	chainExprs := []
 	unitParams := []
 	for unit in units {
-		tableBuilder.add(unit.cdr3Col, { header: "cdr3_" + unit.suffix })
-		tableBuilder.add(unit.chainCol, { header: "chain_" + unit.suffix })
+		cdr3Name := "cdr3_" + unit.suffix
+		entries += [pt.p.column(cdr3Name, { spec: unit.cdr3Col.spec, data: unit.cdr3Col.data })]
+		selects += [pt.col(cdr3Name)]
+
+		chainName := "chain_" + unit.suffix
+		if is_undefined(unit.chainCol) {
+			// No column to join: this unit's locus is a property of the whole set. Appending it
+			// here keeps main.py a pure per-row scorer and the software package unchanged.
+			chainExprs += [pt.lit(unit.chainLiteral).alias(chainName)]
+		} else {
+			entries += [pt.p.column(chainName, { spec: unit.chainCol.spec, data: unit.chainCol.data })]
+			selects += [pt.col(chainName)]
+		}
+
 		unitParams += [{
 			suffix: unit.suffix,
 			domain: unit.domain,
 			label: unit.label
 		}]
 	}
-	tableBuilder.cpu(1)
-	tableBuilder.mem("4GiB")
-	inputTable := tableBuilder.build()
+
+	df := ptWf.frame(pt.p.full(entries...)).select(selects...)
+	if len(chainExprs) > 0 {
+		df = df.withColumns(chainExprs...)
+	}
+	df.save("input.parquet")
+	inputTable := ptWf.run().getFile("input.parquet")
 
 	// Specs in a keyed map so ordering can't perturb the params hash; data passed separately.
 	renderInputs := { inputTable: inputTable }

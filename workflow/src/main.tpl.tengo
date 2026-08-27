@@ -12,25 +12,6 @@ ENTITY_KEY_NAMES := {
 	"pl7.app/variantKey": true
 }
 
-// The alphabet may live directly on the key axis domain, or nested in the structured
-// key's `<key>/structure` domain under the CDR3 sequence entry.
-alphabetFromStructure := func(structureStr) {
-	if is_undefined(structureStr) {
-		return undefined
-	}
-	for entry in json.decode(structureStr) {
-		if len(entry) == 0 || entry[0] != "pl7.app/vdj/sequence" {
-			continue
-		}
-		for idx, item in entry {
-			if idx > 0 && item[0] == "pl7.app/alphabet" {
-				return item[1]
-			}
-		}
-	}
-	return undefined
-}
-
 // Resolve only the anchor spec here; CDR3/chain columns are resolved in the child (score),
 // which anchors them by the entity-key axis name — unknown until the anchor spec resolves.
 wf.prepare(func(args) {
@@ -57,15 +38,6 @@ wf.body(func(args) {
 		ll.panic("Selected dataset has no clonotype or variant key axis")
 	}
 
-	keyDomain := is_undefined(keySpec.domain) ? {} : keySpec.domain
-	alphabet := keyDomain["pl7.app/alphabet"]
-	if is_undefined(alphabet) {
-		alphabet = alphabetFromStructure(keyDomain[keySpec.name + "/structure"])
-	}
-	if is_undefined(alphabet) {
-		ll.panic("Cannot determine CDR3 alphabet")
-	}
-
 	// Forward only trace + label, so an unrelated datasetSpec change doesn't bust the
 	// downstream cache.
 	datasetLabel := ""
@@ -84,7 +56,6 @@ wf.body(func(args) {
 		anchorRef: anchorRef,
 		keyName: keySpec.name,
 		keySpec: keySpec,
-		alphabet: alphabet,
 		species: args.species,
 		datasetLabel: datasetLabel,
 		traceAnnotations: traceAnnotations

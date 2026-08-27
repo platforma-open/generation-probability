@@ -32,20 +32,23 @@ export type BlockData = {
   distributionGraphState: GraphMakerState;
 };
 
-const inputSelectors = [
-  {
-    axes: [{ name: "pl7.app/vdj/clonotypeKey" }],
-    annotations: { "pl7.app/isAnchor": "true" },
-  },
-  {
-    axes: [{ name: "pl7.app/vdj/scClonotypeKey" }],
-    annotations: { "pl7.app/isAnchor": "true" },
-  },
-  {
-    axes: [{ name: "pl7.app/variantKey" }],
-    annotations: { "pl7.app/isAnchor": "true" },
-  },
+// The axes a dataset can be keyed on, mirroring ENTITY_KEY_NAMES in main.tpl.tengo. Both the
+// selectors and the scorability check below are derived from this one list so they cannot drift.
+const ENTITY_KEY_NAMES = [
+  "pl7.app/vdj/clonotypeKey",
+  "pl7.app/vdj/scClonotypeKey",
+  "pl7.app/variantKey",
 ];
+
+const inputSelectors = ENTITY_KEY_NAMES.map((name) => ({
+  axes: [{ name }],
+  annotations: { "pl7.app/isAnchor": "true" },
+}));
+
+// The key axis is found by name, never by position: which index it sits at is a property of the
+// producer, and main.tpl.tengo searches for it the same way rather than assuming one.
+const keyAxisOf = (spec: { axesSpec: { name: string; domain?: Record<string, string> }[] }) =>
+  spec.axesSpec.find((axis) => ENTITY_KEY_NAMES.includes(axis.name));
 
 const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
   datasetLabel: "",
@@ -74,19 +77,34 @@ export const platforma = BlockModelV3.create(dataModel)
     const collection = ColumnsCollection(["result_pool"]).filter({
       include: inputSelectors,
     });
+    // A dataset is scorable when the locus can be established. Normally that means a per-record
+    // pl7.app/vdj/chain column. An imported receptor set has none: the locus is a property of
+    // the whole set and is read from the key axis instead -- pl7.app/vdj/chain for a single
+    // mapped chain, or pl7.app/vdj/receptor plus the chain column domain for a paired one --
+    // so requiring the column would keep every imported set out of this dropdown.
     const scorableIds = new Set(
       collection
         .getColumns()
-        .filter(
-          (anchor) =>
-            !ColumnsCollection(["result_pool"])
-              .discover({
-                anchors: { main: anchor.getSpec() },
-                include: [{ name: [{ type: "exact", value: CHAIN_NAME }] }],
-                mode: "enrichment",
-              })
-              .isEmpty(),
-        )
+        .filter((anchor) => {
+          const keyAxis = keyAxisOf(anchor.getSpec());
+          const keyDomain = keyAxis?.domain ?? {};
+          if (
+            keyAxis?.name === "pl7.app/variantKey" &&
+            keyDomain["pl7.app/vdj/clonotypingRunId"] !== undefined
+          ) {
+            return (
+              keyDomain["pl7.app/vdj/chain"] !== undefined ||
+              keyDomain["pl7.app/vdj/receptor"] !== undefined
+            );
+          }
+          return !ColumnsCollection(["result_pool"])
+            .discover({
+              anchors: { main: anchor.getSpec() },
+              include: [{ name: [{ type: "exact", value: CHAIN_NAME }] }],
+              mode: "enrichment",
+            })
+            .isEmpty();
+        })
         .map((anchor) => anchor.id),
     );
     return deriveColumnOptions(collection)
