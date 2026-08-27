@@ -114,7 +114,6 @@ def parse_args() -> Args:
         required=True,
         action="append",
         dest="chain_columns",
-        help="column holding each row's locus, or =LOCUS for a unit with a constant locus",
     )
     parser.add_argument(
         "--pgen-column",
@@ -132,39 +131,15 @@ def parse_args() -> Args:
     return Args(**vars(parser.parse_args()))
 
 
-def resolve_chain_literals(df: pl.LazyFrame, chain_args: list[str]) -> tuple[pl.LazyFrame, list[str]]:
-    """Materialise `=LOCUS` chain arguments as constant columns.
-
-    A dataset whose locus is a property of the whole unit rather than of each row -- an
-    imported receptor set, which carries no per-record `pl7.app/vdj/chain` column -- passes
-    `=IGH` instead of a column name. Adding it as a real column here keeps every step
-    downstream (group_by, join, the unsupported-chain report) working unchanged.
-    """
-    literals: dict[str, str] = {}
-    resolved: list[str] = []
-    for index, argument in enumerate(chain_args):
-        if not argument.startswith("="):
-            resolved.append(argument)
-            continue
-        name = f"_chain_literal_{index}"
-        literals[name] = argument[1:]
-        resolved.append(name)
-    if literals:
-        df = df.with_columns([pl.lit(v).alias(k) for k, v in literals.items()])
-    return df, resolved
-
-
 def main() -> None:
     args = parse_args()
     df = pl.scan_parquet(args.input)
-    # Args is frozen, so the resolved names travel as a local.
-    df, chain_columns = resolve_chain_literals(df, args.chain_columns)
 
     columns = set(df.collect_schema().names())
     missing_columns = {
         args.key_column,
         *args.sequence_columns,
-        *chain_columns,
+        *args.chain_columns,
     } - columns
     if missing_columns:
         msg = f"columns not found in {args.input}: {missing_columns}"
@@ -172,10 +147,10 @@ def main() -> None:
     if args.workers < 1:
         msg = f"--workers must be >= 1, got {args.workers}"
         raise SystemExit(msg)
-    if len(args.sequence_columns) != len(chain_columns):
+    if len(args.sequence_columns) != len(args.chain_columns):
         msg = (
             "number of sequence columns and chain columns do not match "
-            f"({len(args.sequence_columns)} ≠ {len(chain_columns)})"
+            f"({len(args.sequence_columns)} ≠ {len(args.chain_columns)})"
         )
         raise SystemExit(msg)
 
@@ -219,7 +194,7 @@ def main() -> None:
 
         for sequence, chain, pgen, neg_log_pgen in zip(
             args.sequence_columns,
-            chain_columns,
+            args.chain_columns,
             args.pgen_columns,
             args.neg_log_pgen_columns,
             strict=True,

@@ -4,6 +4,7 @@ smart := import("@platforma-sdk/workflow-tengo:smart")
 assets := import("@platforma-sdk/workflow-tengo:assets")
 pframes := import("@platforma-sdk/workflow-tengo:pframes")
 pBundle := import("@platforma-sdk/workflow-tengo:pframes.bundle")
+pt := import("@platforma-sdk/workflow-tengo:pt")
 
 pgenTpl := assets.importTemplate(":pgen-process")
 
@@ -182,17 +183,17 @@ self.body(func(args) {
 		}
 
 		// Preferred: the per-row locus column. An imported set has none, so fall back to the
-		// unit's single mapped chain, passed to the scorer as "=LOCUS". Without a locus from
-		// either source there is nothing to score against.
+		// unit's single mapped chain and materialise it as a constant column below. Without a
+		// locus from either source there is nothing to score against.
 		chainCol := firstWithDomain(chainCols, slot.chainDomain)
-		chainArg := undefined
+		chainLiteral := undefined
 		label := chainLabel(keySpec, cdr3Col, slot.scChain)
 		if is_undefined(chainCol) {
 			chain := bareChain(keySpec, slot.scChain)
 			if is_undefined(chain) || is_undefined(CHAIN_LOCUS[chain]) {
 				return
 			}
-			chainArg = "=" + CHAIN_LOCUS[chain]
+			chainLiteral = CHAIN_LOCUS[chain]
 			// Name the unit from the resolved chain rather than SC_CHAIN_LABELS, whose TCR rows
 			// are inverted; this keeps an imported set's labels agreeing with its loci.
 			label = CHAIN_LABELS[chain]
@@ -204,7 +205,7 @@ self.body(func(args) {
 			label: label,
 			cdr3Col: cdr3Col,
 			chainCol: chainCol,
-			chainArg: chainArg,
+			chainLiteral: chainLiteral,
 			seqCols: allWithDomain(cdr3Cols, slot.chainDomain)
 		}]
 	}
@@ -236,13 +237,36 @@ self.body(func(args) {
 		unitParams += [{
 			suffix: unit.suffix,
 			domain: unit.domain,
-			label: unit.label,
-			chainArg: unit.chainArg
+			label: unit.label
 		}]
 	}
 	tableBuilder.cpu(1)
 	tableBuilder.mem("4GiB")
 	inputTable := tableBuilder.build()
+
+	// Units with a constant locus carry no chain column, so add one here rather than teaching
+	// the scorer about constants: main.py stays a pure per-row scorer and the software package
+	// stays unchanged — no version bump, no image rebuild for a change that is purely about
+	// where the locus comes from.
+	//
+	// Only runs when a literal is actually needed, so bulk and single-cell inputs keep exactly
+	// the graph they had: no extra step, no extra parquet pass.
+	literalUnits := []
+	for unit in units {
+		if !is_undefined(unit.chainLiteral) {
+			literalUnits += [unit]
+		}
+	}
+	if len(literalUnits) > 0 {
+		ptWf := pt.workflow().mem("4GiB").cpu(1)
+		df := ptWf.frame(inputTable, { xsvType: "parquet" })
+		exprs := []
+		for unit in literalUnits {
+			exprs += [pt.lit(unit.chainLiteral).alias("chain_" + unit.suffix)]
+		}
+		df.withColumns(exprs...).save("with-chain.parquet")
+		inputTable = ptWf.run().getFile("with-chain.parquet")
+	}
 
 	// Specs in a keyed map so ordering can't perturb the params hash; data passed separately.
 	renderInputs := { inputTable: inputTable }

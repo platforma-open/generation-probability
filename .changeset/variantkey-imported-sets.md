@@ -1,5 +1,4 @@
 ---
-'@platforma-open/milaboratories.generation-probability.software': minor
 '@platforma-open/milaboratories.generation-probability.workflow': minor
 '@platforma-open/milaboratories.generation-probability.model': minor
 '@platforma-open/milaboratories.generation-probability.block': minor
@@ -20,8 +19,9 @@ vocabulary its axis does not use — so the run died on "Cannot determine CDR3 a
 set is amino acid throughout, which is now the answer.
 
 Scoring needed a per-row locus column and quietly produced an empty result without one. A unit
-whose locus is constant now passes it to the scorer as `=LOCUS`, which materialises it as a
-column, leaving the grouping, joining and unsupported-chain reporting unchanged.
+whose locus is constant now gets that column added by a `pt` step over the built table, so the
+scoring script is unchanged and still simply reads a locus per row. The step runs only when a
+constant is actually needed, so bulk and single-cell inputs keep the graph they had.
 
 Whether the two chains are scored separately followed the key axis being
 `pl7.app/vdj/scClonotypeKey`. A paired imported set carries both chains in one frame under the
