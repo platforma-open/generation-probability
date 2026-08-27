@@ -17,23 +17,42 @@ CHAIN_LABELS := {
 	"TCRDelta": "Delta"
 }
 
-SC_CHAIN_LABELS := {
-	"IG": { "A": "Heavy", "B": "Light" },
-	"TCRAB": { "A": "Alpha", "B": "Beta" },
-	"TCRGD": { "A": "Gamma", "B": "Delta" }
+// Which chain each A/B slot holds. MiXCR fixes "A" as the more diverse chain — the one that
+// recombines a D segment — so a receptor's chain order is TCRBeta/TCRAlpha and
+// TCRDelta/TCRGamma, not alphabetical (mixcr-clonotyping/workflow/src/process.tpl.tengo:43,695).
+RECEPTOR_CHAINS := {
+	"IG": { "A": "IGHeavy", "B": "IGLight" },
+	"TCRAB": { "A": "TCRBeta", "B": "TCRAlpha" },
+	"TCRGD": { "A": "TCRDelta", "B": "TCRGamma" }
 }
 
+// The OLGA locus each chain maps to. IGLight is deliberately not a locus: OLGA needs IGK and
+// IGL as separate models and an imported set does not record which, so it is passed through
+// unchanged — the scorer skips any chain it has no model for and names it in the skipped-chains
+// report, which the model already surfaces.
+CHAIN_LOCUS := {
+	"IGHeavy": "IGH",
+	"IGLight": "IGLight",
+	"TCRAlpha": "TRA",
+	"TCRBeta": "TRB",
+	"TCRGamma": "TRG",
+	"TCRDelta": "TRD"
+}
+
+// Labels come from the chain, and the A/B slot resolves to a chain through RECEPTOR_CHAINS —
+// the same table the locus is derived from, so a label can never disagree with the model that
+// produced the value beside it.
 chainLabel := func(keySpec, cdr3Col, scChain) {
 	if is_undefined(scChain) {
 		return CHAIN_LABELS[keySpec.domain["pl7.app/vdj/chain"]]
 	}
 	axis := cdr3Col.spec.axesSpec[0]
 	axisDomain := is_undefined(axis.domain) ? {} : axis.domain
-	receptor := axisDomain["pl7.app/vdj/receptor"]
-	if is_undefined(receptor) || is_undefined(SC_CHAIN_LABELS[receptor]) {
+	byLetter := RECEPTOR_CHAINS[axisDomain["pl7.app/vdj/receptor"]]
+	if is_undefined(byLetter) {
 		return undefined
 	}
-	return SC_CHAIN_LABELS[receptor][scChain]
+	return CHAIN_LABELS[byLetter[scChain]]
 }
 
 matchDomain := func(col, required) {
@@ -74,31 +93,6 @@ scSlot := func(scChain) {
 }
 BULK_SLOT := { scChain: undefined, chainDomain: {} }
 
-// MiXCR's A/B convention: "A" is always the more diverse chain, so a receptor's chain order is
-// TCRBeta/TCRAlpha and TCRDelta/TCRGamma rather than alphabetical
-// (mixcr-clonotyping/workflow/src/process.tpl.tengo:43,695).
-//
-// SC_CHAIN_LABELS above has both TCR rows inverted against this. That is a pre-existing
-// labelling bug, and it is deliberately not reused here: a wrong letter in THIS table would
-// pick the wrong OLGA model and produce wrong Pgen values, not just a wrong label.
-RECEPTOR_CHAINS := {
-	"IG": { "A": "IGHeavy", "B": "IGLight" },
-	"TCRAB": { "A": "TCRBeta", "B": "TCRAlpha" },
-	"TCRGD": { "A": "TCRDelta", "B": "TCRGamma" }
-}
-
-// The OLGA locus each chain maps to. IGLight is deliberately not a locus: OLGA needs IGK and
-// IGL as separate models and an imported set does not record which, so it is passed through
-// unchanged — the scorer skips any chain it has no model for and names it in the skipped-chains
-// report, which the model already surfaces.
-CHAIN_LOCUS := {
-	"IGHeavy": "IGH",
-	"IGLight": "IGLight",
-	"TCRAlpha": "TRA",
-	"TCRBeta": "TRB",
-	"TCRGamma": "TRG",
-	"TCRDelta": "TRD"
-}
 
 // An imported receptor set carries no per-record pl7.app/vdj/chain column: the locus is a
 // property of the whole unit. Resolve it from the chain the scientist mapped — on the key axis
@@ -194,8 +188,6 @@ self.body(func(args) {
 				return
 			}
 			chainLiteral = CHAIN_LOCUS[chain]
-			// Name the unit from the resolved chain rather than SC_CHAIN_LABELS, whose TCR rows
-			// are inverted; this keeps an imported set's labels agreeing with its loci.
 			label = CHAIN_LABELS[chain]
 		}
 
