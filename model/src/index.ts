@@ -38,7 +38,7 @@ const ENTITY_KEY_NAMES = [
   "pl7.app/vdj/clonotypeKey",
   "pl7.app/vdj/scClonotypeKey",
   "pl7.app/variantKey",
-] as const;
+];
 
 const inputSelectors = ENTITY_KEY_NAMES.map((name) => ({
   axes: [{ name }],
@@ -48,7 +48,7 @@ const inputSelectors = ENTITY_KEY_NAMES.map((name) => ({
 // The key axis is found by name, never by position: which index it sits at is a property of the
 // producer, and main.tpl.tengo searches for it the same way rather than assuming one.
 const keyAxisOf = (spec: { axesSpec: { name: string; domain?: Record<string, string> }[] }) =>
-  spec.axesSpec.find((axis) => (ENTITY_KEY_NAMES as readonly string[]).includes(axis.name));
+  spec.axesSpec.find((axis) => ENTITY_KEY_NAMES.includes(axis.name));
 
 const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
   datasetLabel: "",
