@@ -203,7 +203,7 @@ self.body(func(args) {
 	// domain, on a variantKey axis — so the axis name alone would call it bulk, and the bulk slot
 	// takes the first CDR3 column it finds and drops the other chain.
 	isSingleCell := keySpec.name == "pl7.app/vdj/scClonotypeKey"
-	if !isSingleCell && keySpec.name == "pl7.app/variantKey" {
+	if keySpec.name == "pl7.app/variantKey" {
 		for col in cdr3Cols {
 			if !is_undefined(col.spec.domain) &&
 				!is_undefined(col.spec.domain["pl7.app/vdj/scClonotypeChain/index"]) {
