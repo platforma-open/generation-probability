@@ -74,19 +74,34 @@ export const platforma = BlockModelV3.create(dataModel)
     const collection = ColumnsCollection(["result_pool"]).filter({
       include: inputSelectors,
     });
+    // A dataset is scorable when the locus can be established. Normally that means a per-record
+    // pl7.app/vdj/chain column. An imported receptor set has none: the locus is a property of
+    // the whole set and is read from the key axis instead -- pl7.app/vdj/chain for a single
+    // mapped chain, or pl7.app/vdj/receptor plus the chain column domain for a paired one --
+    // so requiring the column would keep every imported set out of this dropdown.
     const scorableIds = new Set(
       collection
         .getColumns()
-        .filter(
-          (anchor) =>
-            !ColumnsCollection(["result_pool"])
-              .discover({
-                anchors: { main: anchor.getSpec() },
-                include: [{ name: [{ type: "exact", value: CHAIN_NAME }] }],
-                mode: "enrichment",
-              })
-              .isEmpty(),
-        )
+        .filter((anchor) => {
+          const keyAxis = anchor.getSpec().axesSpec[1];
+          const keyDomain = keyAxis?.domain ?? {};
+          if (
+            keyAxis?.name === "pl7.app/variantKey" &&
+            keyDomain["pl7.app/vdj/clonotypingRunId"] !== undefined
+          ) {
+            return (
+              keyDomain["pl7.app/vdj/chain"] !== undefined ||
+              keyDomain["pl7.app/vdj/receptor"] !== undefined
+            );
+          }
+          return !ColumnsCollection(["result_pool"])
+            .discover({
+              anchors: { main: anchor.getSpec() },
+              include: [{ name: [{ type: "exact", value: CHAIN_NAME }] }],
+              mode: "enrichment",
+            })
+            .isEmpty();
+        })
         .map((anchor) => anchor.id),
     );
     return deriveColumnOptions(collection)

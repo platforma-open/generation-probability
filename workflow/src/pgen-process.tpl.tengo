@@ -24,7 +24,13 @@ self.body(func(args) {
 		arg("--key-column").arg("clonotypeKey")
 	for unit in units {
 		cmd = cmd.arg("--sequence-column").arg("cdr3_" + unit.suffix)
-		cmd = cmd.arg("--chain-column").arg("chain_" + unit.suffix)
+		// A unit with a constant locus (an imported set, which has no per-row chain column)
+		// carries it as "=LOCUS"; the scorer materialises that as a column.
+		if is_undefined(unit.chainArg) {
+			cmd = cmd.arg("--chain-column").arg("chain_" + unit.suffix)
+		} else {
+			cmd = cmd.arg("--chain-column").arg(unit.chainArg)
+		}
 		cmd = cmd.arg("--pgen-column").arg("pgen_" + unit.suffix)
 		cmd = cmd.arg("--neg-log-pgen-column").arg("neglog_" + unit.suffix)
 	}

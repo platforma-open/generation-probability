@@ -73,6 +73,47 @@ scSlot := func(scChain) {
 }
 BULK_SLOT := { scChain: undefined, chainDomain: {} }
 
+// MiXCR's A/B convention: "A" is always the more diverse chain, so a receptor's chain order is
+// TCRBeta/TCRAlpha and TCRDelta/TCRGamma rather than alphabetical
+// (mixcr-clonotyping/workflow/src/process.tpl.tengo:43,695).
+//
+// SC_CHAIN_LABELS above has both TCR rows inverted against this. That is a pre-existing
+// labelling bug, and it is deliberately not reused here: a wrong letter in THIS table would
+// pick the wrong OLGA model and produce wrong Pgen values, not just a wrong label.
+RECEPTOR_CHAINS := {
+	"IG": { "A": "IGHeavy", "B": "IGLight" },
+	"TCRAB": { "A": "TCRBeta", "B": "TCRAlpha" },
+	"TCRGD": { "A": "TCRDelta", "B": "TCRGamma" }
+}
+
+// The OLGA locus each chain maps to. IGLight is deliberately not a locus: OLGA needs IGK and
+// IGL as separate models and an imported set does not record which, so it is passed through
+// unchanged — the scorer skips any chain it has no model for and names it in the skipped-chains
+// report, which the model already surfaces.
+CHAIN_LOCUS := {
+	"IGHeavy": "IGH",
+	"IGLight": "IGLight",
+	"TCRAlpha": "TRA",
+	"TCRBeta": "TRB",
+	"TCRGamma": "TRG",
+	"TCRDelta": "TRD"
+}
+
+// An imported receptor set carries no per-record pl7.app/vdj/chain column: the locus is a
+// property of the whole unit. Resolve it from the chain the scientist mapped — on the key axis
+// for a single-chain set, from the receptor plus the A/B slot for a paired one.
+bareChain := func(keySpec, scChain) {
+	keyDomain := is_undefined(keySpec.domain) ? {} : keySpec.domain
+	if is_undefined(scChain) {
+		return keyDomain["pl7.app/vdj/chain"]
+	}
+	byLetter := RECEPTOR_CHAINS[keyDomain["pl7.app/vdj/receptor"]]
+	if is_undefined(byLetter) {
+		return undefined
+	}
+	return byLetter[scChain]
+}
+
 self.defineOutputs("pgenPf", "exportPf", "progress")
 
 self.prepare(func(args) {
@@ -110,12 +151,24 @@ self.body(func(args) {
 	columns := args.columns
 	alphabet := args.alphabet
 	keySpec := args.keySpec
-	isSingleCell := keySpec.name == "pl7.app/vdj/scClonotypeKey"
 
 	// CDR3 lives under one of two namespaces (pl7.app/vdj/sequence for clonotype keys,
 	// pl7.app/sequence for variantKey); merge both — only one is present, the other returns [].
 	cdr3Cols := columns.getColumns("cdr3") + columns.getColumns("cdr3Plain")
 	chainCols := columns.getColumns("chain")
+
+	// A paired imported set carries both chains in one frame under the scClonotypeChain column
+	// domain, on a variantKey axis — so the axis name alone would call it bulk, and the bulk slot
+	// takes the first CDR3 column it finds and drops the other chain.
+	isSingleCell := keySpec.name == "pl7.app/vdj/scClonotypeKey"
+	if !isSingleCell && keySpec.name == "pl7.app/variantKey" {
+		for col in cdr3Cols {
+			colDomain := is_undefined(col.spec.domain) ? {} : col.spec.domain
+			if !is_undefined(colDomain["pl7.app/vdj/scClonotypeChain/index"]) {
+				isSingleCell = true
+			}
+		}
+	}
 
 	units := []
 	addUnit := func(slot) {
@@ -124,16 +177,34 @@ self.body(func(args) {
 			domain[k] = v
 		}
 		cdr3Col := firstWithDomain(cdr3Cols, domain)
-		chainCol := firstWithDomain(chainCols, slot.chainDomain)
-		if is_undefined(cdr3Col) || is_undefined(chainCol) {
+		if is_undefined(cdr3Col) {
 			return
 		}
+
+		// Preferred: the per-row locus column. An imported set has none, so fall back to the
+		// unit's single mapped chain, passed to the scorer as "=LOCUS". Without a locus from
+		// either source there is nothing to score against.
+		chainCol := firstWithDomain(chainCols, slot.chainDomain)
+		chainArg := undefined
+		label := chainLabel(keySpec, cdr3Col, slot.scChain)
+		if is_undefined(chainCol) {
+			chain := bareChain(keySpec, slot.scChain)
+			if is_undefined(chain) || is_undefined(CHAIN_LOCUS[chain]) {
+				return
+			}
+			chainArg = "=" + CHAIN_LOCUS[chain]
+			// Name the unit from the resolved chain rather than SC_CHAIN_LABELS, whose TCR rows
+			// are inverted; this keeps an imported set's labels agreeing with its loci.
+			label = CHAIN_LABELS[chain]
+		}
+
 		units += [{
 			suffix: is_undefined(slot.scChain) ? "bulk" : slot.scChain,
 			domain: domain,
-			label: chainLabel(keySpec, cdr3Col, slot.scChain),
+			label: label,
 			cdr3Col: cdr3Col,
 			chainCol: chainCol,
+			chainArg: chainArg,
 			seqCols: allWithDomain(cdr3Cols, slot.chainDomain)
 		}]
 	}
@@ -159,11 +230,14 @@ self.body(func(args) {
 	unitParams := []
 	for unit in units {
 		tableBuilder.add(unit.cdr3Col, { header: "cdr3_" + unit.suffix })
-		tableBuilder.add(unit.chainCol, { header: "chain_" + unit.suffix })
+		if !is_undefined(unit.chainCol) {
+			tableBuilder.add(unit.chainCol, { header: "chain_" + unit.suffix })
+		}
 		unitParams += [{
 			suffix: unit.suffix,
 			domain: unit.domain,
-			label: unit.label
+			label: unit.label,
+			chainArg: unit.chainArg
 		}]
 	}
 	tableBuilder.cpu(1)
