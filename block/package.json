@@ -26,6 +26,7 @@
   "devDependencies": {
     "@milaboratories/ts-builder": "catalog:",
     "@milaboratories/ts-configs": "catalog:",
+    "@platforma-open/milaboratories.generation-probability.kind": "workspace:*",
     "@platforma-open/milaboratories.generation-probability.model": "workspace:*",
     "@platforma-open/milaboratories.generation-probability.ui": "workspace:*",
     "@platforma-open/milaboratories.generation-probability.workflow": "workspace:*",
