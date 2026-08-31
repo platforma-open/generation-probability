@@ -15,11 +15,12 @@ import {
   PColumnIdAndSpec,
   PlDataTableStateV2,
 } from "@platforma-sdk/model";
+import { kind, SPECIES_OPTIONS } from "@platforma-open/milaboratories.generation-probability.kind";
 
-export const SPECIES_OPTIONS = [
-  { label: "Human", value: "human" },
-  { label: "Mouse", value: "mouse" },
-] as const;
+// Re-exported for the UI's species dropdown. Defined in the kind so the
+// init-params contract and the dropdown cannot name different sets.
+export { SPECIES_OPTIONS };
+export type { Species } from "@platforma-open/milaboratories.generation-probability.kind";
 
 export const PGEN_NAME = "pl7.app/vdj/generationProbability";
 const CHAIN_NAME = "pl7.app/vdj/chain";
@@ -50,7 +51,9 @@ const inputSelectors = ENTITY_KEY_NAMES.map((name) => ({
 const keyAxisOf = (spec: { axesSpec: { name: string; domain?: Record<string, string> }[] }) =>
   spec.axesSpec.find((axis) => ENTITY_KEY_NAMES.includes(axis.name));
 
-const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
+const dataModel = new DataModelBuilder({ kind }).from<BlockData>("v1").init(({ params }) => ({
+  inputAnchor: params?.inputAnchor,
+  species: params?.species,
   datasetLabel: "",
   tableState: createPlDataTableStateV2(),
   distributionGraphState: {
@@ -62,7 +65,7 @@ const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
   },
 }));
 
-export const platforma = BlockModelV3.create(dataModel)
+export const platforma = BlockModelV3.create({ dataModel, kind })
 
   .args((data) => {
     if (data.inputAnchor == null) throw new Error("Input dataset is required");
@@ -72,6 +75,12 @@ export const platforma = BlockModelV3.create(dataModel)
       species: data.species,
     };
   })
+
+  // Inverse of the kind's init-params contract: the same two fields `init`
+  // consumes. `datasetLabel` is derived by the UI from the picked option, and
+  // the table / chart states are view state -- neither is configuration a
+  // template carries.
+  .templateParams((data) => ({ inputAnchor: data.inputAnchor, species: data.species }))
 
   .output("inputOptions", () => {
     const collection = ColumnsCollection(["result_pool"]).filter({
