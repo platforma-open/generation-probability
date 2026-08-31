@@ -15,12 +15,8 @@ import {
   PColumnIdAndSpec,
   PlDataTableStateV2,
 } from "@platforma-sdk/model";
+import type { Species } from "@platforma-open/milaboratories.generation-probability.kind";
 import { kind, SPECIES_OPTIONS } from "@platforma-open/milaboratories.generation-probability.kind";
-
-// Re-exported for the UI's species dropdown. Defined in the kind so the
-// init-params contract and the dropdown cannot name different sets.
-export { SPECIES_OPTIONS };
-export type { Species } from "@platforma-open/milaboratories.generation-probability.kind";
 
 export const PGEN_NAME = "pl7.app/vdj/generationProbability";
 const CHAIN_NAME = "pl7.app/vdj/chain";
@@ -28,7 +24,7 @@ const CHAIN_NAME = "pl7.app/vdj/chain";
 export type BlockData = {
   inputAnchor?: string;
   datasetLabel: string;
-  species?: (typeof SPECIES_OPTIONS)[number]["value"];
+  species?: Species;
   tableState: PlDataTableStateV2;
   distributionGraphState: GraphMakerState;
 };

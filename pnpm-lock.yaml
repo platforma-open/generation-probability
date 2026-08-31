@@ -210,6 +210,9 @@ importers:
       '@milaboratories/graph-maker':
         specifier: 'catalog:'
         version: 1.6.1(@milaboratories/pl-model-common@1.48.0)(@platforma-sdk/model@1.83.0)(@platforma-sdk/ui-vue@1.83.3(@bytecodealliance/preview2-shim@0.17.9)(@vue/compiler-dom@3.5.40)(@vue/server-renderer@3.5.24(vue@3.5.24(typescript@7.0.2)))(typescript@7.0.2))(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(typescript@7.0.2)
+      '@platforma-open/milaboratories.generation-probability.kind':
+        specifier: workspace:*
+        version: link:../kind
       '@platforma-open/milaboratories.generation-probability.model':
         specifier: workspace:*
         version: link:../model

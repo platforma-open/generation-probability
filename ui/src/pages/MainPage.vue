@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { SPECIES_OPTIONS } from "@platforma-open/milaboratories.generation-probability.model";
+import { SPECIES_OPTIONS } from "@platforma-open/milaboratories.generation-probability.kind";
 import {
   PlAgDataTableV2,
   PlAlert,
