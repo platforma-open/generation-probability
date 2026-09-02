@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { SPECIES_OPTIONS } from "@platforma-open/milaboratories.generation-probability.model";
+import { SPECIES_OPTIONS } from "@platforma-open/milaboratories.generation-probability.kind";
 import {
   PlAgDataTableV2,
   PlAlert,
@@ -21,11 +21,29 @@ const tableSettings = usePlDataTableSettingsV2({
 
 const settingsOpen = ref(app.model.data.inputAnchor === undefined);
 
+const labelFor = (value: string | undefined) =>
+  app.model.outputs.inputOptions?.find((option) => option.value === value)?.label ?? "";
+
 function selectDataset(value: string | undefined) {
   app.model.data.inputAnchor = value;
-  app.model.data.datasetLabel =
-    app.model.outputs.inputOptions?.find((option) => option.value === value)?.label ?? "";
+  app.model.data.datasetLabel = labelFor(value);
 }
+
+// A project template seeds `inputAnchor` alone -- `datasetLabel` is derived
+// from the picked option, so the kind's contract leaves it out and the block
+// starts with a dataset and no label, showing a subtitle with the species but
+// no dataset. Fill it once the options resolve, from the same lookup the picker
+// uses. Fires at most once per dataset: the guard is "label is empty", and
+// writing it makes that false.
+watch(
+  () => [app.model.data.inputAnchor, app.model.outputs.inputOptions] as const,
+  () => {
+    if (!app.model.data.inputAnchor || app.model.data.datasetLabel) return;
+    const label = labelFor(app.model.data.inputAnchor);
+    if (label) app.model.data.datasetLabel = label;
+  },
+  { immediate: true },
+);
 
 watch(
   () => app.model.outputs.isRunning,

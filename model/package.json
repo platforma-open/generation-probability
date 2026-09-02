@@ -23,6 +23,7 @@
   "dependencies": {
     "@milaboratories/graph-maker": "catalog:",
     "@milaboratories/helpers": "catalog:",
+    "@platforma-open/milaboratories.generation-probability.kind": "workspace:*",
     "@platforma-sdk/model": "catalog:"
   },
   "devDependencies": {

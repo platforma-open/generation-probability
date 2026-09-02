@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@milaboratories/graph-maker": "catalog:",
+    "@platforma-open/milaboratories.generation-probability.kind": "workspace:*",
     "@platforma-open/milaboratories.generation-probability.model": "workspace:*",
     "@platforma-sdk/model": "catalog:",
     "@platforma-sdk/ui-vue": "catalog:",
