@@ -1,16 +1,18 @@
 <script lang="ts" setup>
 import { SPECIES_OPTIONS } from "@platforma-open/milaboratories.generation-probability.kind";
+import type { DatasetSelection, PlRef } from "@platforma-sdk/model";
+import { createDatasetSelection, createPrimaryRef, plRefsEqual } from "@platforma-sdk/model";
 import {
   PlAgDataTableV2,
   PlAlert,
   PlBlockPage,
   PlBtnGhost,
+  PlDatasetSelector,
   PlDropdown,
-  PlDropdownRef,
   PlSlideModal,
   usePlDataTableSettingsV2,
 } from "@platforma-sdk/ui-vue";
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useApp } from "../app";
 
 const app = useApp();
@@ -19,27 +21,45 @@ const tableSettings = usePlDataTableSettingsV2({
   model: () => app.model.outputs.pgenTable,
 });
 
-const settingsOpen = ref(app.model.data.inputAnchor === undefined);
+const settingsOpen = ref(app.model.data.datasetRef === undefined);
 
-const labelFor = (value: string | undefined) =>
-  app.model.outputs.inputOptions?.find((option) => option.value === value)?.label ?? "";
+// The subtitle label of the picked entry: the subset's when one is picked (its label already
+// carries the dataset as a prefix, e.g. "VHH / IG Heavy / Isotype AD"), else the dataset's.
+const labelFor = (ref: PlRef | undefined, filter: PlRef | undefined) => {
+  if (ref === undefined) return "";
+  const option = app.model.outputs.inputOptions?.find((o) => plRefsEqual(o.primary.ref, ref, true));
+  if (filter !== undefined) {
+    const filterLabel = option?.filters?.find((f) => plRefsEqual(f.ref, filter, true))?.label;
+    if (filterLabel !== undefined) return filterLabel;
+  }
+  return option?.primary.label ?? "";
+};
 
-function selectDataset(value: string | undefined) {
-  app.model.data.inputAnchor = value;
-  app.model.data.datasetLabel = labelFor(value);
-}
+// The selector picks a dataset, or a dataset narrowed by one of its subset columns.
+const datasetSelection = computed<DatasetSelection | undefined>({
+  get: () => {
+    const { datasetRef, filterRef } = app.model.data;
+    if (datasetRef === undefined) return undefined;
+    return createDatasetSelection(createPrimaryRef(datasetRef, filterRef));
+  },
+  set: (selection) => {
+    app.model.data.datasetRef = selection?.primary.column;
+    app.model.data.filterRef = selection?.primary.filter;
+    app.model.data.datasetLabel = labelFor(selection?.primary.column, selection?.primary.filter);
+  },
+});
 
-// A project template seeds `inputAnchor` alone -- `datasetLabel` is derived
+// A project template seeds `datasetRef` alone -- `datasetLabel` is derived
 // from the picked option, so the kind's contract leaves it out and the block
 // starts with a dataset and no label, showing a subtitle with the species but
 // no dataset. Fill it once the options resolve, from the same lookup the picker
 // uses. Fires at most once per dataset: the guard is "label is empty", and
 // writing it makes that false.
 watch(
-  () => [app.model.data.inputAnchor, app.model.outputs.inputOptions] as const,
+  () => [app.model.data.datasetRef, app.model.outputs.inputOptions] as const,
   () => {
-    if (!app.model.data.inputAnchor || app.model.data.datasetLabel) return;
-    const label = labelFor(app.model.data.inputAnchor);
+    if (!app.model.data.datasetRef || app.model.data.datasetLabel) return;
+    const label = labelFor(app.model.data.datasetRef, app.model.data.filterRef);
     if (label) app.model.data.datasetLabel = label;
   },
   { immediate: true },
@@ -75,13 +95,12 @@ watch(
 
   <PlSlideModal v-model="settingsOpen" close-on-outside-click shadow>
     <template #title>Settings</template>
-    <PlDropdownRef
-      :model-value="app.model.data.inputAnchor"
-      @update:model-value="selectDataset"
-      :options="app.model.outputs.inputOptions ?? []"
+    <PlDatasetSelector
+      v-model="datasetSelection"
+      :options="app.model.outputs.inputOptions"
       label="Clonotype dataset"
       :required="true"
-      :error="!app.model.data.inputAnchor ? 'Clonotype dataset is required' : undefined"
+      :error="!app.model.data.datasetRef ? 'Clonotype dataset is required' : undefined"
       clearable
     />
     <PlDropdown

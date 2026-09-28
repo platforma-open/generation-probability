@@ -308,7 +308,13 @@ self.body(func(args) {
 		}]
 	}
 
-	df := ptWf.frame(pt.p.full(entries...)).select(selects...)
+	// Optional subset filter: an inner join keeps only its clonotypes. The select below
+	// leaves the filter column itself out of the table.
+	frameInput := pt.p.full(entries...)
+	if !is_undefined(args.filterColumn) {
+		frameInput = pt.p.inner(frameInput, pt.p.column("subsetFilter", args.filterColumn))
+	}
+	df := ptWf.frame(frameInput).select(selects...)
 	if len(chainExprs) > 0 {
 		df = df.withColumns(chainExprs...)
 	}
@@ -325,7 +331,7 @@ self.body(func(args) {
 			renderInputs["seqData_" + seqId] = col.data
 		}
 	}
-	renderInputs.params = smart.createJsonResource({
+	params := {
 		species: args.species,
 		alphabet: alphabet,
 		keySpec: keySpec,
@@ -333,7 +339,12 @@ self.body(func(args) {
 		seqSpecs: seqSpecs,
 		datasetLabel: args.datasetLabel,
 		traceAnnotations: args.traceAnnotations
-	})
+	}
+	// Set only for a subset run, so a full-data run keeps exactly its previous params
+	if !is_undefined(args.subset) {
+		params.subset = args.subset
+	}
+	renderInputs.params = smart.createJsonResource(params)
 	processResult := render.create(pgenTpl, renderInputs)
 
 	return {
