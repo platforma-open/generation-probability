@@ -3,6 +3,7 @@ exec := import("@platforma-sdk/workflow-tengo:exec")
 f := import("@platforma-sdk/workflow-tengo:exec.formula")
 assets := import("@platforma-sdk/workflow-tengo:assets")
 pframes := import("@platforma-sdk/workflow-tengo:pframes")
+subset := import(":subset")
 pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
 xsv := import("@platforma-sdk/workflow-tengo:pframes.xsv")
 
@@ -53,18 +54,6 @@ self.body(func(args) {
 		label: "Generation Probability"
 	})
 
-	// A run on a subset stamps the subset's column id into the domain of its Pgen columns,
-	// so it neither collides with a full-data run on the same dataset nor gets taken for one.
-	// Full-data output keeps the plain unit domain.
-	domainFor := func(unit) {
-		if is_undefined(params.subset) {
-			return unit.domain
-		}
-		d := copy(unit.domain)
-		d["pl7.app/subset"] = params.subset
-		return d
-	}
-
 	columnSpecs := []
 	orderedIds := []
 	for unit in units {
@@ -83,7 +72,7 @@ self.body(func(args) {
 			spec: {
 				name: "pl7.app/vdj/generationProbability",
 				valueType: "Double",
-				domain: domainFor(unit),
+				domain: subset.subsetDomain(unit.domain, params.subset),
 				annotations: {
 					"pl7.app/label": "Generation probability" + labelSuffix,
 					"pl7.app/format": ".2e"
@@ -96,7 +85,7 @@ self.body(func(args) {
 			spec: {
 				name: "pl7.app/vdj/minlog10GenerationProbability",
 				valueType: "Double",
-				domain: domainFor(unit),
+				domain: subset.subsetDomain(unit.domain, params.subset),
 				annotations: {
 					"pl7.app/label": "-log10 generation probability" + labelSuffix,
 					"pl7.app/format": ".2f"

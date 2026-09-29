@@ -1,0 +1,38 @@
+// Test harness for subset.lib.tengo: the scorer-input join with and without a subset filter,
+// and the domain stamp. Driven by ../subset.test.ts.
+self := import("@platforma-sdk/workflow-tengo:tpl")
+file := import("@platforma-sdk/workflow-tengo:file")
+smart := import("@platforma-sdk/workflow-tengo:smart")
+pt := import("@platforma-sdk/workflow-tengo:pt")
+subset := import(":subset")
+
+self.defineOutputs("full", "filtered", "domains")
+
+self.body(func(inputs) {
+	col := func(name) { return { spec: inputs.specs[name], data: inputs[name] } }
+	keySpec := inputs.specs.cdr3.axesSpec[0]
+
+	// The same shape score.tpl.tengo builds for the scorer.
+	scorerInput := func(filterColumn) {
+		ptWf := pt.workflow().mem("1GiB").cpu(1)
+		entries := [pt.p.column("cdr3_H", col("cdr3")), pt.p.column("chain_H", col("chain"))]
+		frameInput := subset.restrictToSubset(pt.p.full(entries...), filterColumn)
+		ptWf.frame(frameInput).
+			select(pt.sc.axis(keySpec).alias("clonotypeKey"), pt.col("cdr3_H"), pt.col("chain_H")).
+			save("input.tsv")
+		return file.exportFile(ptWf.run().getFile("input.tsv"))
+	}
+
+	unitDomain := { "pl7.app/alphabet": "aminoacid" }
+	subsetRun := subset.subsetDomain(unitDomain, "SUBSET_ID")
+	return {
+		full: scorerInput(undefined),
+		filtered: scorerInput(col("tag")),
+		domains: smart.createJsonResource({
+			fullRun: subset.subsetDomain(unitDomain, undefined),
+			subsetRun: subsetRun,
+			// copy(), not in-place: the unit's own domain must stay unstamped
+			unitAfter: unitDomain
+		})
+	}
+})

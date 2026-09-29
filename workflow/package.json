@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "build": "shx rm -rf dist && pl-tengo build",
-    "check": "pl-tengo check",
-    "format": "/usr/bin/env emacs --script ./format.el || echo 'No emacs.'"
+    "check": "pl-tengo imports && pl-tengo check",
+    "format": "/usr/bin/env emacs --script ./format.el || echo 'No emacs.'",
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@platforma-open/milaboratories.generation-probability.software": "workspace:*",
@@ -15,6 +16,7 @@
   "devDependencies": {
     "@platforma-sdk/tengo-builder": "catalog:",
     "@platforma-sdk/test": "catalog:",
-    "shx": "catalog:"
+    "shx": "catalog:",
+    "vitest": "catalog:"
   }
 }

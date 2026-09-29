@@ -3,6 +3,7 @@ render := import("@platforma-sdk/workflow-tengo:render")
 smart := import("@platforma-sdk/workflow-tengo:smart")
 assets := import("@platforma-sdk/workflow-tengo:assets")
 pframes := import("@platforma-sdk/workflow-tengo:pframes")
+subset := import(":subset")
 pBundle := import("@platforma-sdk/workflow-tengo:pframes.bundle")
 pt := import("@platforma-sdk/workflow-tengo:pt")
 ll := import("@platforma-sdk/workflow-tengo:ll")
@@ -308,12 +309,9 @@ self.body(func(args) {
 		}]
 	}
 
-	// Optional subset filter: an inner join keeps only its clonotypes. The select below
-	// leaves the filter column itself out of the table.
-	frameInput := pt.p.full(entries...)
-	if !is_undefined(args.filterColumn) {
-		frameInput = pt.p.inner(frameInput, pt.p.column("subsetFilter", args.filterColumn))
-	}
+	// Optional subset filter: only its clonotypes are scored. The select below leaves the
+	// filter column itself out of the table.
+	frameInput := subset.restrictToSubset(pt.p.full(entries...), args.filterColumn)
 	df := ptWf.frame(frameInput).select(selects...)
 	if len(chainExprs) > 0 {
 		df = df.withColumns(chainExprs...)
