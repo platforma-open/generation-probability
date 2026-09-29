@@ -3,6 +3,7 @@ exec := import("@platforma-sdk/workflow-tengo:exec")
 f := import("@platforma-sdk/workflow-tengo:exec.formula")
 assets := import("@platforma-sdk/workflow-tengo:assets")
 pframes := import("@platforma-sdk/workflow-tengo:pframes")
+subset := import(":subset")
 pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
 xsv := import("@platforma-sdk/workflow-tengo:pframes.xsv")
 
@@ -71,7 +72,7 @@ self.body(func(args) {
 			spec: {
 				name: "pl7.app/vdj/generationProbability",
 				valueType: "Double",
-				domain: unit.domain,
+				domain: subset.subsetDomain(unit.domain, params.subset),
 				annotations: {
 					"pl7.app/label": "Generation probability" + labelSuffix,
 					"pl7.app/format": ".2e"
@@ -84,7 +85,7 @@ self.body(func(args) {
 			spec: {
 				name: "pl7.app/vdj/minlog10GenerationProbability",
 				valueType: "Double",
-				domain: unit.domain,
+				domain: subset.subsetDomain(unit.domain, params.subset),
 				annotations: {
 					"pl7.app/label": "-log10 generation probability" + labelSuffix,
 					"pl7.app/format": ".2f"

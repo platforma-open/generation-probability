@@ -3,6 +3,7 @@ render := import("@platforma-sdk/workflow-tengo:render")
 smart := import("@platforma-sdk/workflow-tengo:smart")
 assets := import("@platforma-sdk/workflow-tengo:assets")
 pframes := import("@platforma-sdk/workflow-tengo:pframes")
+subset := import(":subset")
 pBundle := import("@platforma-sdk/workflow-tengo:pframes.bundle")
 pt := import("@platforma-sdk/workflow-tengo:pt")
 ll := import("@platforma-sdk/workflow-tengo:ll")
@@ -308,7 +309,10 @@ self.body(func(args) {
 		}]
 	}
 
-	df := ptWf.frame(pt.p.full(entries...)).select(selects...)
+	// Optional subset filter: only its clonotypes are scored. The select below leaves the
+	// filter column itself out of the table.
+	frameInput := subset.restrictToSubset(pt.p.full(entries...), args.filterColumn)
+	df := ptWf.frame(frameInput).select(selects...)
 	if len(chainExprs) > 0 {
 		df = df.withColumns(chainExprs...)
 	}
@@ -325,7 +329,7 @@ self.body(func(args) {
 			renderInputs["seqData_" + seqId] = col.data
 		}
 	}
-	renderInputs.params = smart.createJsonResource({
+	params := {
 		species: args.species,
 		alphabet: alphabet,
 		keySpec: keySpec,
@@ -333,7 +337,12 @@ self.body(func(args) {
 		seqSpecs: seqSpecs,
 		datasetLabel: args.datasetLabel,
 		traceAnnotations: args.traceAnnotations
-	})
+	}
+	// Set only for a subset run, so a full-data run keeps exactly its previous params
+	if !is_undefined(args.subset) {
+		params.subset = args.subset
+	}
+	renderInputs.params = smart.createJsonResource(params)
 	processResult := render.create(pgenTpl, renderInputs)
 
 	return {

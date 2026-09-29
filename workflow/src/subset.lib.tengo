@@ -1,0 +1,34 @@
+// Subset-filter helpers shared by score.tpl.tengo (which clonotypes are scored) and
+// pgen-process.tpl.tengo (how the output says it was computed on a subset).
+ll := import("@platforma-sdk/workflow-tengo:ll")
+pt := import("@platforma-sdk/workflow-tengo:pt")
+
+SUBSET_DOMAIN := "pl7.app/subset"
+
+// Keeps only the rows of `frameInput` present in the optional subset column (inner join on
+// the clonotype axis). Without a filter the input is returned unchanged. A later select has
+// to leave the filter column itself out.
+restrictToSubset := func(frameInput, filterColumn) {
+	if is_undefined(filterColumn) {
+		return frameInput
+	}
+	return pt.p.inner(frameInput, pt.p.column("subsetFilter", filterColumn))
+}
+
+// A run on a subset stamps the subset's column id into the domain of its Pgen columns,
+// so it neither collides with a full-data run on the same dataset nor gets taken for one.
+// Full-data output keeps the plain domain.
+subsetDomain := func(domain, subset) {
+	if is_undefined(subset) {
+		return domain
+	}
+	d := copy(domain)
+	d[SUBSET_DOMAIN] = subset
+	return d
+}
+
+export ll.toStrict({
+	SUBSET_DOMAIN: SUBSET_DOMAIN,
+	restrictToSubset: restrictToSubset,
+	subsetDomain: subsetDomain
+})

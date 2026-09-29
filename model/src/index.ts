@@ -1,6 +1,8 @@
 import type { GraphMakerState } from "@milaboratories/graph-maker";
+import type { DatasetOption, PlRef } from "@platforma-sdk/model";
 import {
   BlockModelV3,
+  buildDatasetOptions,
   ColumnsCollection,
   createPFrameForGraphs,
   createPlDataTableStateV2,
@@ -9,11 +11,13 @@ import {
   deriveColumnOptions,
   InferOutputsType,
   isDataColumn,
-  ListOptionBase,
+  isPColumnSpec,
+  isPlRef,
   PColumn,
   PColumnDataUniversal,
   PColumnIdAndSpec,
   PlDataTableStateV2,
+  plRefsEqual,
 } from "@platforma-sdk/model";
 import type { Species } from "@platforma-open/milaboratories.generation-probability.kind";
 import { kind, SPECIES_OPTIONS } from "@platforma-open/milaboratories.generation-probability.kind";
@@ -27,8 +31,30 @@ const CHAIN_NAME = "pl7.app/vdj/chain";
 // unanchored pattern is one rename away from catching it.
 const exactly = (value: string) => ({ type: "exact" as const, value });
 
-export type BlockData = {
+// Two releases shipped under "v1" with different names for the chart state: the develop-branch
+// release stored `graphStateHistogram`, main renamed it `distributionGraphState`. Both reach v2.
+type BlockDataV1 = {
   inputAnchor?: string;
+  datasetLabel: string;
+  species?: Species;
+  tableState: PlDataTableStateV2;
+  distributionGraphState?: GraphMakerState;
+  graphStateHistogram?: GraphMakerState;
+};
+
+const defaultDistributionGraphState = (): GraphMakerState => ({
+  title: "Generation Probability",
+  template: "bins",
+  currentTab: null,
+  layersSettings: { bins: { fillColor: "#99E099" } },
+  axesSettings: { axisY: { scale: "log" } },
+});
+
+export type BlockData = {
+  datasetRef?: PlRef;
+  // Optional `pl7.app/isSubset` column picked alongside the dataset (e.g. a
+  // repertoire-labeling label). Only clonotypes present in it are scored.
+  filterRef?: PlRef;
   datasetLabel: string;
   species?: Species;
   tableState: PlDataTableStateV2;
@@ -48,33 +74,63 @@ const inputSelectors = ENTITY_KEY_NAMES.map((name) => ({
   annotations: { "pl7.app/isAnchor": "true" },
 }));
 
+/**
+ * A result-pool column id is the canonical JSON of its PlRef, so the two convert both ways.
+ * The id form is what the workflow reads (`args.inputAnchor`) and what v1 stored, so keeping
+ * it byte-identical keeps existing blocks' args unchanged.
+ */
+export function plRefFromColumnId(id: string | undefined): PlRef | undefined {
+  if (id === undefined) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(id);
+    return isPlRef(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Keys in canonical (sorted) order: this must equal the pool's own column id.
+export const columnIdFromPlRef = (ref: PlRef): string =>
+  JSON.stringify({ __isRef: true, blockId: ref.blockId, name: ref.name });
+
 // The key axis is found by name, never by position: which index it sits at is a property of the
 // producer, and main.tpl.tengo searches for it the same way rather than assuming one.
 const keyAxisOf = (spec: { axesSpec: { name: string; domain?: Record<string, string> }[] }) =>
   spec.axesSpec.find((axis) => ENTITY_KEY_NAMES.includes(axis.name));
 
-const dataModel = new DataModelBuilder({ kind }).from<BlockData>("v1").init(({ params }) => ({
-  inputAnchor: params?.inputAnchor,
-  species: params?.species,
-  datasetLabel: "",
-  tableState: createPlDataTableStateV2(),
-  distributionGraphState: {
-    title: "Generation Probability",
-    template: "bins",
-    currentTab: null,
-    layersSettings: { bins: { fillColor: "#99E099" } },
-    axesSettings: { axisY: { scale: "log" } },
-  },
-}));
+const dataModel = new DataModelBuilder({ kind })
+  .from<BlockDataV1>("v1")
+  // v2 — the dataset is stored as a PlRef (PlDatasetSelector works in refs), next to an
+  // optional subset filter.
+  .migrate<BlockData>(
+    "v2",
+    ({ inputAnchor, graphStateHistogram, distributionGraphState, ...rest }) => ({
+      ...rest,
+      datasetRef: plRefFromColumnId(inputAnchor),
+      distributionGraphState:
+        distributionGraphState ?? graphStateHistogram ?? defaultDistributionGraphState(),
+    }),
+  )
+  .init(({ params }) => ({
+    datasetRef: params?.datasetRef,
+    filterRef: params?.filterRef,
+    species: params?.species,
+    datasetLabel: "",
+    tableState: createPlDataTableStateV2(),
+    distributionGraphState: defaultDistributionGraphState(),
+  }));
 
 export const platforma = BlockModelV3.create({ dataModel, kind })
 
   .args((data) => {
-    if (data.inputAnchor == null) throw new Error("Input dataset is required");
+    if (data.datasetRef == null) throw new Error("Input dataset is required");
     if (data.species == null) throw new Error("Species is required");
     return {
-      inputAnchor: data.inputAnchor,
+      inputAnchor: columnIdFromPlRef(data.datasetRef),
       species: data.species,
+      // Column-id form, like `inputAnchor`: the workflow stamps this exact string as the
+      // outputs' `pl7.app/subset` domain value, so consumers can compare it to their own filter.
+      ...(data.filterRef !== undefined && { inputFilter: columnIdFromPlRef(data.filterRef) }),
     };
   })
 
@@ -82,9 +138,13 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   // consumes. `datasetLabel` is derived by the UI from the picked option, and
   // the table / chart states are view state -- neither is configuration a
   // template carries.
-  .templateParams((data) => ({ inputAnchor: data.inputAnchor, species: data.species }))
+  .templateParams((data) => ({
+    datasetRef: data.datasetRef,
+    filterRef: data.filterRef,
+    species: data.species,
+  }))
 
-  .output("inputOptions", () => {
+  .output("inputOptions", (ctx): DatasetOption[] => {
     const collection = ColumnsCollection(["result_pool"]).filter({
       include: inputSelectors,
     });
@@ -115,12 +175,37 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
         .isEmpty();
     });
     if (scorable.length === 0) return [];
+
+    // Subset columns (`pl7.app/isSubset`) on each dataset's axes, e.g. repertoire-labeling
+    // labels or Lead Selection picks. Only the filters are taken from here: its primary refs
+    // carry `requireEnrichments`, which would make this block depend on every block between
+    // it and the dataset. The primary predicate only has to cover the datasets above:
+    // results are matched to them by ref.
+    const withFilters =
+      buildDatasetOptions(ctx, {
+        primary: (spec) =>
+          isPColumnSpec(spec) &&
+          spec.annotations?.["pl7.app/isAnchor"] === "true" &&
+          keyAxisOf(spec) !== undefined,
+        // Only subsets keyed by the clonotype axis alone: Pgen is scored per clonotype.
+        filter: (spec) =>
+          isPColumnSpec(spec) &&
+          spec.axesSpec.length === 1 &&
+          ENTITY_KEY_NAMES.includes(spec.axesSpec[0]?.name ?? ""),
+      }) ?? [];
+
     // Label the survivors only: `deriveColumnOptions` reads the spec of every
     // entry it is handed, so passing the whole collection here would re-read
     // the ones just discarded.
-    return deriveColumnOptions([{ columns: scorable, isFinal: collection.isFinal() }]).map<
-      ListOptionBase<string>
-    >(({ id, label }) => ({ value: id, label }));
+    return deriveColumnOptions([{ columns: scorable, isFinal: collection.isFinal() }]).flatMap(
+      ({ id, label }) => {
+        const ref = plRefFromColumnId(id);
+        if (ref === undefined) return [];
+        const primary = { ref, label };
+        const filters = withFilters.find((o) => plRefsEqual(o.primary.ref, ref, true))?.filters;
+        return [filters === undefined ? { primary } : { primary, filters }];
+      },
+    );
   })
 
   .outputWithStatus("pgenTable", (ctx) => {
