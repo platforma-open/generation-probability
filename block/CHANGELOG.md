@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.generation-probability.block
 
+## 1.2.1
+
+### Patch Changes
+
+- 84ee6d1: Update SDK: PlAgDataTable no longer recreates its grid in an endless loop
+
 ## 1.2.0
 
 ### Minor Changes
