@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.generation-probability.block
 
+## 1.3.0
+
+### Minor Changes
+
+- 5e6df9c: Allow selection of filtered datasets as input
+
 ## 1.2.1
 
 ### Patch Changes

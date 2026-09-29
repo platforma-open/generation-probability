@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.generation-probability.workflow
 
+## 1.2.0
+
+### Minor Changes
+
+- 5e6df9c: Allow selection of filtered datasets as input
+
 ## 1.1.1
 
 ### Patch Changes

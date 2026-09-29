@@ -1,5 +1,17 @@
 # @platforma-open/milaboratories.generation-probability.ui
 
+## 1.1.0
+
+### Minor Changes
+
+- 5e6df9c: Allow selection of filtered datasets as input
+
+### Patch Changes
+
+- Updated dependencies [5e6df9c]
+  - @platforma-open/milaboratories.generation-probability.model@1.3.0
+  - @platforma-open/milaboratories.generation-probability.kind@1.1.0
+
 ## 1.0.2
 
 ### Patch Changes
