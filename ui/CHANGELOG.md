@@ -1,5 +1,12 @@
 # @platforma-open/milaboratories.generation-probability.ui
 
+## 1.1.1
+
+### Patch Changes
+
+- Updated dependencies [02470f9]
+  - @platforma-open/milaboratories.generation-probability.model@1.4.0
+
 ## 1.1.0
 
 ### Minor Changes

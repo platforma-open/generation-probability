@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.generation-probability.workflow
 
+## 1.3.0
+
+### Minor Changes
+
+- 02470f9: Update input subset domain annotation
+
 ## 1.2.0
 
 ### Minor Changes
