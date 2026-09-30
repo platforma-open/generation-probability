@@ -59,7 +59,7 @@ tplTest("subset filter: scorer input and Pgen domain stamp", { timeout: 120000 }
   );
   expect(domains).toEqual({
     fullRun: { "pl7.app/alphabet": "aminoacid" },
-    subsetRun: { "pl7.app/alphabet": "aminoacid", "pl7.app/subset": "SUBSET_ID" },
+    subsetRun: { "pl7.app/alphabet": "aminoacid", "pl7.app/inputSubset": "SUBSET_ID" },
     unitAfter: { "pl7.app/alphabet": "aminoacid" },
   });
 });

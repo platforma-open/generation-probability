@@ -129,7 +129,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
       inputAnchor: columnIdFromPlRef(data.datasetRef),
       species: data.species,
       // Column-id form, like `inputAnchor`: the workflow stamps this exact string as the
-      // outputs' `pl7.app/subset` domain value, so consumers can compare it to their own filter.
+      // outputs' `pl7.app/inputSubset` domain value, so consumers can compare it to their own filter.
       ...(data.filterRef !== undefined && { inputFilter: columnIdFromPlRef(data.filterRef) }),
     };
   })
