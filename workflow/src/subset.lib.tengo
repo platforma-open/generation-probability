@@ -3,7 +3,7 @@
 ll := import("@platforma-sdk/workflow-tengo:ll")
 pt := import("@platforma-sdk/workflow-tengo:pt")
 
-SUBSET_DOMAIN := "pl7.app/subset"
+SUBSET_DOMAIN := "pl7.app/inputSubset"
 
 // Keeps only the rows of `frameInput` present in the optional subset column (inner join on
 // the clonotype axis). Without a filter the input is returned unchanged. A later select has
