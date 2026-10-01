@@ -165,7 +165,7 @@ def main() -> None:
 
     with ProcessPoolExecutor(
         max_workers=args.workers,
-        mp_context=multiprocessing.get_context("forkserver"),
+        mp_context=multiprocessing.get_context("spawn"),
     ) as pool:
 
         def process_batch(batch: pl.Series) -> pl.Series:
