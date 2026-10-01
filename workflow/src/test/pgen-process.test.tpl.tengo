@@ -1,0 +1,39 @@
+self := import("@platforma-sdk/workflow-tengo:tpl")
+assets := import("@platforma-sdk/workflow-tengo:assets")
+file := import("@platforma-sdk/workflow-tengo:file")
+render := import("@platforma-sdk/workflow-tengo:render")
+smart := import("@platforma-sdk/workflow-tengo:smart")
+pt := import("@platforma-sdk/workflow-tengo:pt")
+xsv := import("@platforma-sdk/workflow-tengo:pframes.xsv")
+
+pgenTpl := assets.importTemplate(":pgen-process")
+
+self.defineOutputs("table")
+
+self.body(func(inputs) {
+	keySpec := inputs.specs.cdr3.axesSpec[0]
+
+	ptWf := pt.workflow().mem("1GiB").cpu(1)
+	ptWf.frame(pt.p.full(
+		pt.p.column("cdr3_bulk", { spec: inputs.specs.cdr3, data: inputs.cdr3 }),
+		pt.p.column("chain_bulk", { spec: inputs.specs.chain, data: inputs.chain })
+	)).
+		select(pt.sc.axis(keySpec).alias("clonotypeKey"), pt.col("cdr3_bulk"), pt.col("chain_bulk")).
+		save("input.parquet")
+
+	processResult := render.create(pgenTpl, {
+		inputTable: ptWf.run().getFile("input.parquet"),
+		params: smart.createJsonResource({
+			species: "human",
+			alphabet: "aminoacid",
+			keySpec: keySpec,
+			units: [{ suffix: "bulk", domain: { "pl7.app/alphabet": "aminoacid" }, label: "" }],
+			seqSpecs: {},
+			traceAnnotations: {}
+		})
+	})
+
+	return {
+		table: file.exportFile(xsv.exportFrame(processResult.output("exportPf"), "tsv", { naStr: "NA" }))
+	}
+})
