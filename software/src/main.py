@@ -7,6 +7,8 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 from functools import cache, partial
+from multiprocessing import forkserver
+from multiprocessing.context import BaseContext
 from pathlib import Path
 
 import polars as pl
@@ -131,6 +133,16 @@ def parse_args() -> Args:
     return Args(**vars(parser.parse_args()))
 
 
+def pool_context() -> BaseContext:
+    try:
+        context = multiprocessing.get_context("forkserver")
+        forkserver.ensure_running()
+    except (ValueError, OSError) as e:
+        print(f"forkserver unavailable ({e}), using spawn", file=sys.stderr)
+        return multiprocessing.get_context("spawn")
+    return context
+
+
 def main() -> None:
     args = parse_args()
     df = pl.scan_parquet(args.input)
@@ -165,7 +177,7 @@ def main() -> None:
 
     with ProcessPoolExecutor(
         max_workers=args.workers,
-        mp_context=multiprocessing.get_context("spawn"),
+        mp_context=pool_context(),
     ) as pool:
 
         def process_batch(batch: pl.Series) -> pl.Series:
