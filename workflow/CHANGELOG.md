@@ -1,5 +1,12 @@
 # @platforma-open/milaboratories.generation-probability.workflow
 
+## 1.3.1
+
+### Patch Changes
+
+- Updated dependencies [13fb256]
+  - @platforma-open/milaboratories.generation-probability.software@1.0.2
+
 ## 1.3.0
 
 ### Minor Changes
