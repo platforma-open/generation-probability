@@ -1,5 +1,13 @@
 # @platforma-open/milaboratories.generation-probability.workflow
 
+## 1.3.2
+
+### Patch Changes
+
+- a65fc13: Release every package through npm trusted publishing (OIDC) so each package's trusted publisher is used before it expires.
+- Updated dependencies [a65fc13]
+  - @platforma-open/milaboratories.generation-probability.software@1.0.3
+
 ## 1.3.1
 
 ### Patch Changes
