@@ -1,5 +1,5 @@
 import type { GraphMakerState } from "@milaboratories/graph-maker";
-import type { DatasetOption, PlRef } from "@platforma-sdk/model";
+import type { DatasetOption, PColumnSpec, PlRef } from "@platforma-sdk/model";
 import {
   BlockModelV3,
   buildDatasetOptions,
@@ -8,7 +8,6 @@ import {
   createPlDataTableStateV2,
   createPlDataTableV3,
   DataModelBuilder,
-  deriveColumnOptions,
   InferOutputsType,
   isDataColumn,
   isPColumnSpec,
@@ -17,7 +16,6 @@ import {
   PColumnDataUniversal,
   PColumnIdAndSpec,
   PlDataTableStateV2,
-  plRefsEqual,
 } from "@platforma-sdk/model";
 import type { Species } from "@platforma-open/milaboratories.generation-probability.kind";
 import { kind, SPECIES_OPTIONS } from "@platforma-open/milaboratories.generation-probability.kind";
@@ -62,17 +60,13 @@ export type BlockData = {
 };
 
 // The axes a dataset can be keyed on, mirroring ENTITY_KEY_NAMES in main.tpl.tengo. Both the
-// selectors and the scorability check below are derived from this one list so they cannot drift.
+// dataset and filter predicates and the scorability check below are derived from this one list
+// so they cannot drift.
 const ENTITY_KEY_NAMES = [
   "pl7.app/vdj/clonotypeKey",
   "pl7.app/vdj/scClonotypeKey",
   "pl7.app/variantKey",
 ];
-
-const inputSelectors = ENTITY_KEY_NAMES.map((name) => ({
-  axes: [{ name }],
-  annotations: { "pl7.app/isAnchor": "true" },
-}));
 
 /**
  * A result-pool column id is the canonical JSON of its PlRef, so the two convert both ways.
@@ -97,6 +91,33 @@ export const columnIdFromPlRef = (ref: PlRef): string =>
 // producer, and main.tpl.tengo searches for it the same way rather than assuming one.
 const keyAxisOf = (spec: { axesSpec: { name: string; domain?: Record<string, string> }[] }) =>
   spec.axesSpec.find((axis) => ENTITY_KEY_NAMES.includes(axis.name));
+
+/**
+ * Whether Pgen can be scored on a dataset: its chain (IGH, TRB, ...) must be known, since the
+ * model is chain-specific. Usually a pl7.app/vdj/chain column says it. Imported receptor sets
+ * have no such column; their key axis carries pl7.app/vdj/chain or pl7.app/vdj/receptor instead.
+ */
+function isScorable(spec: PColumnSpec): boolean {
+  const keyAxis = keyAxisOf(spec);
+  if (keyAxis === undefined) return false;
+  const keyDomain = keyAxis.domain ?? {};
+  if (
+    keyAxis.name === "pl7.app/variantKey" &&
+    keyDomain["pl7.app/vdj/clonotypingRunId"] !== undefined
+  ) {
+    return (
+      keyDomain["pl7.app/vdj/chain"] !== undefined ||
+      keyDomain["pl7.app/vdj/receptor"] !== undefined
+    );
+  }
+  return !ColumnsCollection(["result_pool"])
+    .discover({
+      anchors: { main: spec },
+      include: [{ name: [exactly(CHAIN_NAME)] }],
+      mode: "enrichment",
+    })
+    .isEmpty();
+}
 
 const dataModel = new DataModelBuilder({ kind })
   .from<BlockDataV1>("v1")
@@ -144,69 +165,22 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     species: data.species,
   }))
 
-  .output("inputOptions", (ctx): DatasetOption[] => {
-    const collection = ColumnsCollection(["result_pool"]).filter({
-      include: inputSelectors,
-    });
-    // A dataset is scorable when the locus can be established. Normally that means a per-record
-    // pl7.app/vdj/chain column. An imported receptor set has none: the locus is a property of
-    // the whole set and is read from the key axis instead -- pl7.app/vdj/chain for a single
-    // mapped chain, or pl7.app/vdj/receptor plus the chain column domain for a paired one --
-    // so requiring the column would keep every imported set out of this dropdown.
-    const scorable = collection.getColumns().filter((anchor) => {
-      const spec = anchor.getSpec();
-      const keyAxis = keyAxisOf(spec);
-      const keyDomain = keyAxis?.domain ?? {};
-      if (
-        keyAxis?.name === "pl7.app/variantKey" &&
-        keyDomain["pl7.app/vdj/clonotypingRunId"] !== undefined
-      ) {
-        return (
-          keyDomain["pl7.app/vdj/chain"] !== undefined ||
-          keyDomain["pl7.app/vdj/receptor"] !== undefined
-        );
-      }
-      return !ColumnsCollection(["result_pool"])
-        .discover({
-          anchors: { main: spec },
-          include: [{ name: [exactly(CHAIN_NAME)] }],
-          mode: "enrichment",
-        })
-        .isEmpty();
-    });
-    if (scorable.length === 0) return [];
-
-    // Subset columns (`pl7.app/isSubset`) on each dataset's axes, e.g. repertoire-labeling
-    // labels or Lead Selection picks. Only the filters are taken from here: its primary refs
-    // carry `requireEnrichments`, which would make this block depend on every block between
-    // it and the dataset. The primary predicate only has to cover the datasets above:
-    // results are matched to them by ref.
-    const withFilters =
+  .output(
+    "inputOptions",
+    (ctx): DatasetOption[] =>
       buildDatasetOptions(ctx, {
         primary: (spec) =>
           isPColumnSpec(spec) &&
           spec.annotations?.["pl7.app/isAnchor"] === "true" &&
-          keyAxisOf(spec) !== undefined,
+          isScorable(spec),
         // Only subsets keyed by the clonotype axis alone: Pgen is scored per clonotype.
         filter: (spec) =>
           isPColumnSpec(spec) &&
           spec.axesSpec.length === 1 &&
           ENTITY_KEY_NAMES.includes(spec.axesSpec[0]?.name ?? ""),
-      }) ?? [];
-
-    // Label the survivors only: `deriveColumnOptions` reads the spec of every
-    // entry it is handed, so passing the whole collection here would re-read
-    // the ones just discarded.
-    return deriveColumnOptions([{ columns: scorable, isFinal: collection.isFinal() }]).flatMap(
-      ({ id, label }) => {
-        const ref = plRefFromColumnId(id);
-        if (ref === undefined) return [];
-        const primary = { ref, label };
-        const filters = withFilters.find((o) => plRefsEqual(o.primary.ref, ref, true))?.filters;
-        return [filters === undefined ? { primary } : { primary, filters }];
-      },
-    );
-  })
+        requireEnrichments: false,
+      }) ?? [],
+  )
 
   .outputWithStatus("pgenTable", (ctx) => {
     const pgenOutput = ctx.outputs?.resolve("pgenPf");
