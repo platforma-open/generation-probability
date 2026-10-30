@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.generation-probability.model
 
+## 1.4.2
+
+### Patch Changes
+
+- 1ada48b: Update the SDK and build the dataset list with buildDatasetOptions (requireEnrichments: false), replacing the custom merge of datasets and their subset filters.
+
 ## 1.4.1
 
 ### Patch Changes
