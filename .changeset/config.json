@@ -2,7 +2,14 @@
   "$schema": "https://unpkg.com/@changesets/config@3.1.4/schema.json",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [],
+  "fixed": [
+    [
+      "@platforma-open/milaboratories.generation-probability.block",
+      "@platforma-open/milaboratories.generation-probability.model",
+      "@platforma-open/milaboratories.generation-probability.ui",
+      "@platforma-open/milaboratories.generation-probability.workflow"
+    ]
+  ],
   "linked": [],
   "access": "restricted",
   "baseBranch": "main",
